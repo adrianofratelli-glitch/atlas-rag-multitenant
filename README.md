@@ -118,6 +118,8 @@ Methodology and reproduction: `./eval/run_all.sh` runs everything. There are **t
 
 Everything is opt-in and the default preserves the previous behavior (see `.env.example`):
 
+> `TRACE_SINK` and `RAG_INJECTION_FILTER` rely on optional helper packages (`tracing`, `guardrails`) that are not part of this repository. Without them both features fail open and are no-ops.
+
 | variable | default | effect |
 |---|---|---|
 | `TRACE_SINK` | `off` | `console`/`phoenix`/`atlas`: one span per stage (embed, vector, lexical, RRF, rerank, generation) with `client_id`, k, scores, tokens, and TTFT. Enabling it **forces** `TRACE_MASK_PII=1` |
