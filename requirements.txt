@@ -1,0 +1,18 @@
+fastapi>=0.130,<0.145
+uvicorn[standard]>=0.30,<0.55
+pymongo>=4.17,<5
+voyageai>=0.2,<0.3
+langchain-core>=1.0,<2
+langchain-anthropic>=1.0,<2
+python-dotenv>=1.0,<2
+# Multipart parsing for the document upload endpoint.
+python-multipart>=0.0.9,<0.1
+
+# Security floors for existing transitive dependencies; no core replacement.
+aiohttp>=3.14.3,<4
+pypdf>=6.16.1,<7
+
+# Turno de chat (rag_graph.py) como StateGraph: retrieve -> (refuse | generate).
+# Checkpoint em MongoDB quando MONGO_URI está configurada, MemorySaver senão.
+langgraph>=1,<2
+langgraph-checkpoint-mongodb>=0.5,<1

@@ -1,0 +1,18 @@
+{
+  "questions": [
+    "📋 O que este documento aborda?",
+    "🎯 Quais são os principais objetivos?",
+    "📅 Quais são os prazos mais importantes?",
+    "💡 Quais são as principais recomendações?",
+    "💰 Quais são os custos ou investimentos previstos?",
+    "🔐 Quais são os requisitos de segurança?",
+    "🏗️ Quais projetos de infraestrutura estão previstos?",
+    "📊 Quais são as métricas e indicadores de sucesso?"
+  ],
+  "followups": {
+    "objetivo": ["Pode detalhar esse objetivo?", "Como ele será medido?"],
+    "custo": ["Como é feito o monitoramento orçamentário?", "Quais ações têm maior ROI esperado?"],
+    "prazo": ["Qual o cronograma completo?", "Quais marcos são críticos?"],
+    "segurança": ["Quais controles estão previstos?", "Como é o plano de resposta a incidentes?"]
+  }
+}

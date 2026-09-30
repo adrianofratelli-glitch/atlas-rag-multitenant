@@ -1,0 +1,51 @@
+# Virtual environments and cache
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# Environment variables — never commit
+.env
+.env.local
+.env.bak
+
+# Client documents and assets — sensitive data
+data/*
+!data/.gitkeep
+assets/*
+!assets/.gitkeep
+
+# Per-client configuration (generated from the example)
+client_config.json
+
+# Editor backup files
+*.save
+
+# Local editor/IDE settings
+.idea/
+.vscode/
+
+# Runtime logs from run.sh
+.logs/
+
+# Eval: ambiente separado e artefatos com trechos do documento do tenant.
+# O golden e os artefatos do bench citam o documento real (nomes, trechos, respostas):
+# o repositório é agnóstico de tenant, então ficam fora. eval/questions.example.json e
+# eval/build_golden.py reconstroem o golden a partir do corpus em data/.
+.venv-eval/
+eval/questions.json
+eval/golden.jsonl
+bench/goldset.json
+bench/results.json
+bench/corpus_stats.json
+bench/relatorio_pdf_vs_markdown.pdf
+eval/reports/retrieval_cache.json
+eval/reports/answers_*.jsonl
+eval/reports/ragas_dataset.jsonl
+eval/reports/ragas_dataset.jsonl
+eval/reports/retrieval_dataset.jsonl
+eval/reports/*.log
