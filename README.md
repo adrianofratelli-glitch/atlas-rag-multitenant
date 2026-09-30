@@ -155,3 +155,7 @@ observability.py      structured logging + /api/metrics
 ## Stack
 
 React + Vite + LeafyGreen · FastAPI (SSE) · MongoDB Atlas Vector Search + Atlas Search · VoyageAI `voyage-3` / `rerank-2` · Claude Sonnet 4.6 · LangChain community loaders.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
