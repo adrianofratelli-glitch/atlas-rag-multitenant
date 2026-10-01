@@ -10,9 +10,9 @@ MODEL = "claude-sonnet-4-6"
 
 def get_client() -> Anthropic:
     return Anthropic(
-        api_key="dummy",
+        api_key=os.environ["ANTHROPIC_API_KEY"],
         base_url=os.getenv("ANTHROPIC_BASE_URL"),
-        default_headers={"api-key": os.environ["ANTHROPIC_API_KEY"]},
+        default_headers={"Authorization": "Bearer " + os.environ["ANTHROPIC_API_KEY"]},
         timeout=180.0,
         max_retries=3,
     )
