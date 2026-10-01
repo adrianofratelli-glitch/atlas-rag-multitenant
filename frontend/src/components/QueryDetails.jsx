@@ -9,11 +9,11 @@ function redact(value, key = '') {
 export default function QueryDetails({ query, operation, namespace, explain, note, label = 'Ver query / chamada executada' }) {
   if (!query && !operation) return null
   const payload = typeof query === 'string' ? query : JSON.stringify(redact(query), null, 2)
-  return <details style={{ marginTop: 8, borderTop: '1px solid var(--border-subtle, #3d4f58)', paddingTop: 7, minWidth: 0, maxWidth: '100%' }}>
-    <summary style={{ cursor: 'pointer', color: 'var(--text-muted, #889397)', fontSize: 12 }}>⌘ {label}</summary>
-    <div style={{ marginTop: 8 }}><div style={{ color: 'var(--text-muted, #889397)', fontSize: 11, marginBottom: 6 }}>{[operation, namespace].filter(Boolean).join(' · ')}{note ? ` · ${note}` : ' · valores sensíveis mascarados'}</div>
-      <pre style={{ margin: 0, padding: 10, overflowX: 'auto', borderRadius: 8, background: '#001923', color: 'var(--text-pri, #e8edeb)', fontSize: 11.5 }}>{payload}</pre>
-      {explain && <pre style={{ margin: '8px 0 0', padding: 10, overflowX: 'auto', borderRadius: 8, background: '#112733', color: 'var(--text-sec, #c1c7c6)', fontSize: 11.5 }}>{JSON.stringify(explain, null, 2)}</pre>}
+  return <details style={{ marginTop: 8, borderTop: '1px solid var(--border-subtle, #2a424d)', paddingTop: 7, minWidth: 0, maxWidth: '100%' }}>
+    <summary style={{ cursor: 'pointer', color: 'var(--text-muted, #9ea2a1)', fontSize: 12 }}>⌘ {label}</summary>
+    <div style={{ marginTop: 8 }}><div style={{ color: 'var(--text-muted, #9ea2a1)', fontSize: 11, marginBottom: 6 }}>{[operation, namespace].filter(Boolean).join(' · ')}{note ? ` · ${note}` : ' · valores sensíveis mascarados'}</div>
+      <pre style={{ margin: 0, padding: 10, overflowX: 'auto', borderRadius: 8, background: '#03111a', color: 'var(--text-pri, #fdfff5)', fontSize: 11.5 }}>{payload}</pre>
+      {explain && <pre style={{ margin: '8px 0 0', padding: 10, overflowX: 'auto', borderRadius: 8, background: '#001e2b', color: 'var(--text-sec, #cdd5ce)', fontSize: 11.5 }}>{JSON.stringify(explain, null, 2)}</pre>}
     </div>
   </details>
 }

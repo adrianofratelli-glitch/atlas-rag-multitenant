@@ -1,16 +1,16 @@
 /* ===== Global base — MongoDB Atlas POC (dark, "pitch" style) ===== */
 :root {
-  --bg: #001e2b;
-  --bg-sec: #112733;
-  --bg-card: #1c2d38;
+  --bg: #061621;
+  --bg-sec: #001e2b;
+  --bg-card: #0a2633;
   --green: #00ed64;
-  --text: #e8edeb;
-  --text-sec: #c1c7c6;
-  --sub: #889397;
-  --border-subtle: #3d4f58;
+  --text: #fdfff5;
+  --text-sec: #cdd5ce;
+  --sub: #9ea2a1;
+  --border-subtle: #2a424d;
   --border-accent: rgba(0, 237, 100, 0.25);
-  --link: #0498ec;
-  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --link: #3d9dff;
+  --mono: 'Source Code Pro', ui-monospace, monospace;
   color-scheme: dark;
 
   /* Canonical names shared across this workspace's PoVs (same values,
@@ -32,7 +32,7 @@ html, body, #root {
 }
 
 body {
-  font-family: 'Outfit', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-family: 'Special Gothic', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   line-height: 1.6;
 }
@@ -330,7 +330,7 @@ body::after {
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 7px; height: 7px; }
 ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #5c6c75; }
+::-webkit-scrollbar-thumb:hover { background: #8a9a9d; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 @media (max-width: 820px) {

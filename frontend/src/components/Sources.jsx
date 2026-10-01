@@ -4,9 +4,9 @@ import { C } from '../theme'
 function SourceCard({ i, s }) {
   const pct = Math.round((s.rerank_score ?? 0) * 100)
   const vpct = Math.round((s.vector_score ?? 0) * 100)
-  let fill = '#889397'
+  let fill = '#9ea2a1'
   if (pct >= 85) fill = C.green
-  else if (pct >= 65) fill = '#F97316'
+  else if (pct >= 65) fill = '#ff4f00'
   const label = `Página ${s.page}${s.source ? ` · ${s.source}` : ''}`
   const matched = s.matched_by || []
   const restrito = s.nivel_acesso === 'restrito'
