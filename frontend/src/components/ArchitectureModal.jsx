@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom'
 // (welcome screen) the same drawing is shown without numbers.
 const REPLACED = ['ETL / CDC', 'banco vetorial à parte', 'motor de busca à parte', 'API de embedding', 'API de rerank']
 
-export default function ArchitectureModal({ stats, elapsedMs, onClose }) {
+export default function ArchitectureModal({ stats, onClose }) {
   const closeRef = useRef(null)
   const onCloseRef = useRef(onClose)
   useEffect(() => { onCloseRef.current = onClose }, [onClose])
@@ -96,9 +96,6 @@ export default function ArchitectureModal({ stats, elapsedMs, onClose }) {
 
         <footer className="arch-foot">
           <div className="arch-metrics">
-            {live && elapsedMs != null && (
-              <span><b>{elapsedMs} ms</b> recuperação desta pergunta</span>
-            )}
             <span><b>1</b> ida ao banco por pergunta</span>
             <span><b>0</b> chaves de IA externas na recuperação</span>
           </div>

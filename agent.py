@@ -7,7 +7,8 @@ import contextvars
 import voyageai
 import telemetry
 from resilience import retry_call
-from config import CLIENT_ID, DB_NAME, NATIVE_ENABLED, NATIVE_EMBED_MODEL, NATIVE_RERANK_MODEL
+from config import (CLIENT_ID, DB_NAME, NATIVE_ENABLED, NATIVE_EMBED_MODEL, NATIVE_RERANK_CANDIDATES,
+                    NATIVE_RERANK_MODEL)
 import native_retrieval
 from db import get_client
 from dotenv import load_dotenv
@@ -219,6 +220,10 @@ def _retrieve_native(query, top_k, levels, sources, use_lexical, use_rerank, fin
         "native_degraded": info["degraded"],
         "rerank_degraded": info["degraded"],  # score não comparável: insufficient_evidence não recusa por ele
         "num_candidates": top_k * 15,
+        # funnel sizes as sent in the pipeline (each branch, $rerank, $limit)
+        "branch_limit": top_k,
+        "rerank_candidates": max(NATIVE_RERANK_CANDIDATES, final_n),
+        "final_n": final_n,
         "vector_hits": sum(1 for r in top_results if "vetorial" in r["matched_by"]),
         "lexical_hits": sum(1 for r in top_results if "léxico" in r["matched_by"]),
         "fused": len(top_results),

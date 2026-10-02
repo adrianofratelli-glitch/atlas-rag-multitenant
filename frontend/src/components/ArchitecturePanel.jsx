@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import ArchitectureModal from './ArchitectureModal'
+import ArchitectureFunnel from './ArchitectureFunnel'
 
 // Side panel beside the chat: the native pipeline, lit by the phase of the
 // current turn. idle -> retrieving (Atlas stages pulse) -> generating (numbers
@@ -10,20 +11,18 @@ const CAPTION = {
   idle: 'Faça uma pergunta: cada estágio acende aqui.',
   retrieving: 'Buscando no Atlas, numa aggregation só…',
   generating: 'Recuperação pronta. Claude redigindo a resposta…',
-  done: 'Última pergunta, estágio por estágio.',
+  done: 'Última pergunta, operador por operador.',
 }
 
-export default function ArchitecturePanel({ phase, stats, elapsedMs }) {
+export default function ArchitecturePanel({ phase, stats, sources }) {
   const [expanded, setExpanded] = useState(false)
   const live = phase === 'generating' || phase === 'done'
   const degraded = Boolean(stats?.native_degraded)
-  const final = stats?.reranked ?? 8
+  const final = stats?.final_n ?? stats?.reranked ?? 8
   const levels = stats?.access_levels || []
   const acl = levels.includes('restrito') ? 'publico + restrito' : 'publico'
-  const embm = stats?.embed_model || 'voyage-4'
   const rerm = stats?.rerank_model || 'rerank-3'
   const atlas = phase === 'retrieving' ? 'pulse' : live ? 'lit' : ''
-  const stage = (dim) => `ap-stage ${dim && live ? 'dim' : atlas}`
 
   return (
     <aside className="ws-aside" aria-label="Arquitetura da recuperação">
@@ -40,28 +39,16 @@ export default function ArchitecturePanel({ phase, stats, elapsedMs }) {
       <div className={`ap-cluster ${atlas}`}>
         <div className="ap-cluster-label">MongoDB Atlas</div>
         <code className="ap-pipe-title">documents.aggregate()</code>
-        <div className="ap-branches">
-          <div className={stage(degraded)}>
-            <code>$vectorSearch</code>
-            <span>autoEmbed · {embm}</span>
-            {live && !degraded && <b>{stats?.vector_hits ?? 0}<small> de {final}</small></b>}
-          </div>
-          <div className={stage(false)}>
-            <code>$search</code>
-            <span>BM25</span>
-            {live && <b>{stats?.lexical_hits ?? 0}<small> de {final}</small></b>}
-          </div>
-        </div>
-        <div className="ap-filter">ACL <code>{acl}</code> + tenant em cada ramo</div>
-        <div className={stage(degraded)}><code>$rankFusion</code><span>fusão no banco</span></div>
-        <div className={stage(degraded)}><code>$rerank · {rerm}</code><span>rerank no banco</span></div>
-        <div className={stage(false)}><code>$limit {final}</code><span>chunks para o prompt</span></div>
+        <ArchitectureFunnel
+          stats={live && !degraded ? stats : null}
+          sources={live && !degraded ? sources : null}
+          searching={phase === 'retrieving'}
+          rerankModel={rerm}
+        />
+        <div className="ap-filter">ACL <code>{acl}</code> + tenant dentro de cada ramo</div>
         <div className="ap-same">
           <span>no mesmo cluster:</span> chunks, vetores, conversas, checkpoints
         </div>
-        {live && elapsedMs != null && (
-          <div className="ap-ms"><b>{elapsedMs} ms</b> nesta pergunta</div>
-        )}
       </div>
 
       <div className={`ap-link ${live ? 'lit' : ''}`}><span>{final} chunks</span></div>
@@ -80,7 +67,7 @@ export default function ArchitecturePanel({ phase, stats, elapsedMs }) {
 
       <button type="button" className="arch-link ap-expand" onClick={() => setExpanded(true)}>ampliar</button>
       {expanded && (
-        <ArchitectureModal stats={live ? stats : null} elapsedMs={elapsedMs} onClose={() => setExpanded(false)} />
+        <ArchitectureModal stats={live ? stats : null} onClose={() => setExpanded(false)} />
       )}
     </aside>
   )

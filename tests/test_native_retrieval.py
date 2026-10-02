@@ -190,6 +190,15 @@ class TestAgentNative(unittest.TestCase):
         self.assertEqual(sources[0]["rerank_score"], 0.91)
         self.assertIn("texto", ctx)
 
+    def test_stats_expose_the_funnel_sizes(self):
+        # The UI animates branch -> fusion -> rerank -> limit with these real sizes.
+        agent, stack = self._patched([ROW])
+        with stack[0], stack[1], stack[2]:
+            _, _, stats = agent.retrieve_context("q", access_levels=["publico"], top_k=15, final_n=8)
+        self.assertEqual(stats["branch_limit"], 15)
+        self.assertEqual(stats["rerank_candidates"], max(agent.NATIVE_RERANK_CANDIDATES, 8))
+        self.assertEqual(stats["final_n"], 8)
+
     def test_empty_result_is_no_context(self):
         agent, stack = self._patched([])
         with stack[0], stack[1], stack[2]:

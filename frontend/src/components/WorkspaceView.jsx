@@ -138,7 +138,7 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
       <ArchitecturePanel
         phase={phase}
         stats={streaming ? last?.stats : lastAnswer?.stats}
-        elapsedMs={streaming ? last?.elapsedMs : lastAnswer?.elapsedMs}
+        sources={streaming ? last?.sources : lastAnswer?.sources}
       />
     )}
     </div>

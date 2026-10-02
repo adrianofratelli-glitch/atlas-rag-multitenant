@@ -3,7 +3,7 @@ import { C } from '../theme'
 import ArchitectureModal from './ArchitectureModal'
 
 // Atlas hybrid-search showcase: vector + lexical -> fusion -> rerank, with metadata.
-export default function EngineStrip({ stats, elapsedMs }) {
+export default function EngineStrip({ stats }) {
   const [showArch, setShowArch] = useState(false)
   if (!stats) return null
   const vec = stats.vector_hits ?? '—'
@@ -58,12 +58,6 @@ export default function EngineStrip({ stats, elapsedMs }) {
         <span>{embm}{dim && dim !== '—' && dim !== 0 ? ` · ${dim}d` : ''}</span>
         <span>|</span>
         <span>{rerm}</span>
-        {elapsedMs != null && (
-          <>
-            <span>|</span>
-            <strong style={{ color: C.green }}>{elapsedMs} ms</strong>
-          </>
-        )}
         {native && (
           <>
             <span className="arch-link-narrow">|</span>
@@ -72,7 +66,7 @@ export default function EngineStrip({ stats, elapsedMs }) {
         )}
       </span>
       {showArch && (
-        <ArchitectureModal stats={stats} elapsedMs={elapsedMs} onClose={() => setShowArch(false)} />
+        <ArchitectureModal stats={stats} onClose={() => setShowArch(false)} />
       )}
     </div>
   )

@@ -26,7 +26,7 @@ export default function ChatMessage({ msg }) {
           )}
 
           {isAssistant && msg.stats && (
-            <EngineStrip stats={msg.stats} elapsedMs={msg.elapsedMs} />
+            <EngineStrip stats={msg.stats} />
           )}
           {isAssistant && msg.stats?.query_details?.map((detail, index) => (
             <QueryDetails
