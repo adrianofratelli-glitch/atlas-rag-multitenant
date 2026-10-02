@@ -49,3 +49,8 @@ eval/reports/ragas_dataset.jsonl
 eval/reports/ragas_dataset.jsonl
 eval/reports/retrieval_dataset.jsonl
 eval/reports/*.log
+# Execuções etiquetadas do eval (EVAL_TAG): caches e relatórios citam o corpus
+eval/reports/retrieval_cache_*.json
+eval/reports/retrieval_results_*.json
+eval/reports/retrieval_legacy_*.md
+eval/reports/retrieval_native_*.md
