@@ -1,9 +1,12 @@
+import { useState } from 'react'
 import { C } from '../theme'
+import ArchitectureModal from './ArchitectureModal'
 
 // Rotating accent colors for the card top bars
 const ACCENTS = [C.green, C.purple, C.cyan, C.teal, C.orange]
 
 export default function Welcome({ config, onPick }) {
+  const [showArch, setShowArch] = useState(false)
   return (
     <div>
       <div className="fade-up d1" style={{ padding: '18px 0 4px' }}>
@@ -33,8 +36,10 @@ export default function Welcome({ config, onPick }) {
             <span><b>1</b> consulta</span>
             <span><b>0</b> pipelines de embedding</span>
             <span><b>0</b> serviços de rerank</span>
+            <button type="button" className="arch-link" onClick={() => setShowArch(true)}>ver a arquitetura</button>
           </div>
         )}
+        {showArch && <ArchitectureModal onClose={() => setShowArch(false)} />}
       </div>
 
       {config.questions?.length > 0 && (

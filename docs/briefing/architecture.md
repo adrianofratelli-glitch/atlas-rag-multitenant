@@ -44,6 +44,23 @@ Usuário digita/clica pergunta na UI
 
 O evento `meta` (fontes + stats do funil de recuperação) chega **antes** do primeiro `token`, de propósito: na demo, o cliente vê a recuperação acontecer antes da redação — fica claro que o LLM respondeu em cima de busca real, não de memória.
 
+## Por que um banco só
+
+![Stack RAG típica, com seis sistemas e dois pipelines de sincronia, ao lado desta PoV, em que embedding, busca léxica e vetorial, fusão e rerank rodam numa aggregation em um cluster Atlas](../architecture/one-database.svg)
+
+Numa stack RAG típica, cada estágio da recuperação é um sistema à parte: o banco OLTP guarda conversas, usuários e ACL; um ETL/CDC copia os dados para um motor de busca (BM25) e para um banco vetorial; uma API de embedding é chamada a cada pergunta e a cada chunk; uma API de rerank tem chave, cota e fallback próprios; e a fusão dos rankings é código na aplicação. No caminho nativo desta PoV (`RAG_NATIVE=1`), tudo isso vira **uma aggregation** na coleção `documents` (`native_retrieval.py`), e os dados operacionais ficam no mesmo cluster:
+
+| Peça | Stack típica | Nesta PoV |
+|---|---|---|
+| Dado operacional (conversas, checkpoints do LangGraph, ACL, TTL) | banco OLTP | mesmo cluster Atlas (`conversations`, `rag_<CLIENT_ID>`, `metadata.*`) |
+| Vetores | banco vetorial + sincronia | `$vectorSearch` com `autoEmbed` na mesma coleção; o Atlas mantém os vetores |
+| Busca léxica | motor de busca + ETL | `$search` (BM25) no `text_index` |
+| Embedding | API externa chamada pela app | `voyage-4`, gerado pelo Atlas |
+| Fusão | código na app | `$rankFusion` |
+| Rerank | API externa | `$rerank` (`rerank-3`) |
+
+Medido nesta PoV (caminho clássico contra nativo, mesmos 303 chunks): 4 idas por pergunta viram 1, a recuperação cai de 852 ms para 743 ms e nenhuma chave de IA externa é usada na recuperação (testado com `VOYAGE_API_KEY` vazia). Só a geração sai do banco (Claude via gateway). O ganho é de **operação** (menos sistemas, sem sincronia, ACL e filtro de tenant num lugar só), não de qualidade: com rerank, a diferença de recall é ruído. `autoEmbed` e `rerank-3` estão em Preview.
+
 ## Por que híbrido (vetorial + lexical) e não só vector search
 
 Decisão central da PoV, e a pergunta que sempre aparece em reunião:

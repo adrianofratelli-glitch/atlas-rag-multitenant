@@ -39,7 +39,8 @@ Uma tela só (sem sidebar, sem roteamento), dividida em **duas abas que nunca se
 | `Welcome` | `frontend/src/components/Welcome.jsx` | 4 perguntas prontas para clicar (ninguém digita ao vivo em apresentação) e, no modo nativo, a linha de vantagens: 1 banco, 1 consulta, 0 pipelines de embedding, 0 serviços de rerank |
 | `ChatMessage` | `frontend/src/components/ChatMessage.jsx` | renderiza Markdown da resposta, token a token |
 | `ChatInput` | `frontend/src/components/ChatInput.jsx` | entrada de texto, bloqueada enquanto um turno está em andamento (`streaming`) |
-| `EngineStrip` | `frontend/src/components/EngineStrip.jsx` | **a peça central da demo.** Mostra o funil: N vetoriais + N léxicos → `$rankFusion` → N reranqueados (no caminho clássico, N fundidos (RRF)), modelo de embedding e de rerank, badge de nível de acesso e latência em ms. Não mostra dimensão nem nome de índice: no caminho nativo o Atlas gera os vetores, então não há dimensão do lado do app |
+| `EngineStrip` | `frontend/src/components/EngineStrip.jsx` | **a peça central da demo.** No caminho nativo o rótulo é `1 aggregation no Atlas`. Mostra o funil: N vetoriais + N léxicos → `$rankFusion` → N reranqueados (no caminho clássico, N fundidos (RRF)), modelo de embedding e de rerank, badge de nível de acesso e latência em ms. Não mostra dimensão nem nome de índice: no caminho nativo o Atlas gera os vetores, então não há dimensão do lado do app |
+| `ArchitectureModal` | `frontend/src/components/ArchitectureModal.jsx` | o desenho "uma pergunta, uma aggregation": aplicação → cluster Atlas (`$vectorSearch` e `$search` → `$rankFusion` → `$rerank` → `$limit`, com chunks, vetores, conversas e checkpoints no mesmo cluster) → Claude via gateway, e a lista do que não precisou existir. Abre sob demanda pelo link **ver arquitetura** (no `Welcome`, sem números; no `EngineStrip`, só no caminho nativo, com os números daquela pergunta: quantos dos chunks finais vieram de cada ramo, ms da recuperação, filtro de ACL). Fecha com `Esc`, clique fora ou `×`. Se o nativo degradou, mostra o aviso e esmaece os estágios que não rodaram |
 | `Sources` | `frontend/src/components/Sources.jsx` | os até 8 chunks que fundamentaram a resposta — cada um com badge `VETORIAL`/`LÉXICO` (de `matched_by`), badge `restrito` se aplicável, score `vetorial → rerank` (`—` no vetorial quando o chunk veio só da busca léxica) e preview do texto |
 | `DocumentsPanel` | `frontend/src/components/DocumentsPanel.jsx` | biblioteca de documentos daquela aba (`workspace = base | uploads`): drag-and-drop de upload com barra de progresso por chunk, lista de documentos com checkbox para restringir a recuperação, tag `restrito`/`base`/tempo até expirar |
 | `OfflineHero` | `frontend/src/components/OfflineHero.jsx` | tela de fallback quando `/api/config` ou o Atlas não respondem, com botão "Reconectar" |
@@ -95,7 +96,8 @@ Antes de apresentar: `setup_db_native.py` já rodado com os dois índices `READY
 ## Roteiro curto para mostrar o MongoDB 9
 
 1. Abrir com a tela inicial: a linha "1 banco · 1 consulta · 0 pipelines de embedding · 0 serviços de rerank" é a tese.
-2. Fazer uma pergunta e abrir **Ver query / chamada executada**: é um único `aggregate` com `$rankFusion` e `$rerank`, e os filtros de tenant e de acesso estão dentro de cada ramo.
-3. Abrir o painel de fontes: os badges `VETORIAL`/`LÉXICO` vêm do `scoreDetails` do próprio `$rankFusion`.
-4. Na aba `Novo conteúdo`, enviar um documento e perguntar sobre ele em seguida: o Atlas gera os vetores sozinho (`autoEmbed`), sem chamada de embedding no código da aplicação.
-5. Alternar para `restrito` para mostrar a ACL, e fechar com o que ainda é Preview (`autoEmbed`, `rerank-3`).
+2. Fazer uma pergunta e clicar em **ver arquitetura** no strip: o desenho acende com os números daquela pergunta e fecha com a lista do que não precisou existir (ETL, banco vetorial, motor de busca, APIs de embedding e rerank).
+3. Abrir **Ver query / chamada executada**: é um único `aggregate` com `$rankFusion` e `$rerank`, e os filtros de tenant e de acesso estão dentro de cada ramo.
+4. Abrir o painel de fontes: os badges `VETORIAL`/`LÉXICO` vêm do `scoreDetails` do próprio `$rankFusion`.
+5. Na aba `Novo conteúdo`, enviar um documento e perguntar sobre ele em seguida: o Atlas gera os vetores sozinho (`autoEmbed`), sem chamada de embedding no código da aplicação.
+6. Alternar para `restrito` para mostrar a ACL, e fechar com o que ainda é Preview (`autoEmbed`, `rerank-3`).

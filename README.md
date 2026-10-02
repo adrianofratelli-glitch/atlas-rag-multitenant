@@ -32,6 +32,10 @@ The UI is in Brazilian Portuguese (used in customer sessions); code and this REA
 
 On MongoDB 9 the retrieval half of a RAG system collapses into the database. Here is what that changes in this PoV, compared with the classic setup it replaced (embedding and rerank through the VoyageAI SDK, RRF in Python):
 
+![Typical RAG stack with six separate systems and two sync pipelines, next to this PoV, where embedding, lexical and vector search, fusion and rerank run in one aggregation on one Atlas cluster](docs/architecture/one-database.svg)
+
+The same drawing is in the app: **ver arquitetura**, on the welcome screen or on the retrieval strip under each answer, opens it with that question's numbers (how many of the final chunks came from each branch, retrieval time, access filter applied).
+
 | | classic path | native path (MongoDB 9) |
 |---|---|---|
 | Embedding | app calls the Voyage SDK for every query and every chunk | Atlas generates and keeps the vectors in sync (`autoEmbed` index); the app never touches a vector |

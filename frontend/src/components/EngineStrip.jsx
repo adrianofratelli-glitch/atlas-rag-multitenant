@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import { C } from '../theme'
+import ArchitectureModal from './ArchitectureModal'
 
 // Atlas hybrid-search showcase: vector + lexical -> fusion -> rerank, with metadata.
 export default function EngineStrip({ stats, elapsedMs }) {
+  const [showArch, setShowArch] = useState(false)
   if (!stats) return null
   const vec = stats.vector_hits ?? '—'
   const lex = stats.lexical_hits ?? 0
@@ -18,7 +21,7 @@ export default function EngineStrip({ stats, elapsedMs }) {
   return (
     <div className="engine-strip">
       <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1.4, color: C.green, textTransform: 'uppercase' }}>
-        ⚡ Atlas {hybrid ? 'Hybrid Search' : 'Vector Search'}
+        ⚡ {native ? '1 aggregation no Atlas' : `Atlas ${hybrid ? 'Hybrid Search' : 'Vector Search'}`}
       </span>
 
       <span style={{ fontSize: 11, color: C.text }}>
@@ -61,7 +64,16 @@ export default function EngineStrip({ stats, elapsedMs }) {
             <strong style={{ color: C.green }}>{elapsedMs} ms</strong>
           </>
         )}
+        {native && (
+          <>
+            <span>|</span>
+            <button type="button" className="arch-link" onClick={() => setShowArch(true)}>ver arquitetura</button>
+          </>
+        )}
       </span>
+      {showArch && (
+        <ArchitectureModal stats={stats} elapsedMs={elapsedMs} onClose={() => setShowArch(false)} />
+      )}
     </div>
   )
 }
