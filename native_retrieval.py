@@ -58,7 +58,9 @@ def _branches(score_details):
     details = score_details.get("details") if isinstance(score_details, dict) else None
     if not isinstance(details, list):
         return []
-    return [d for d in details if isinstance(d, dict) and d.get("inputPipelineName") in _BRANCH_LABEL]
+    # Ramo em que o chunk não apareceu vem com rank "NA" e value 0 — não conta como acerto.
+    return [d for d in details if isinstance(d, dict) and d.get("inputPipelineName") in _BRANCH_LABEL
+            and isinstance(d.get("rank"), int)]
 
 
 def matched_by(score_details):

@@ -104,6 +104,13 @@ class TestScoreDetails(unittest.TestCase):
     def test_vector_only(self):
         self.assertEqual(nr.matched_by({"details": [self.SD["details"][0]]}), ["vetorial"])
 
+    def test_branch_with_rank_na_is_not_a_match(self):
+        sd = {"details": [{"inputPipelineName": "lexical", "rank": 1, "value": 5.5},
+                          {"inputPipelineName": "vector", "rank": "NA", "value": 0}]}
+        self.assertEqual(nr.matched_by(sd), ["léxico"])
+        self.assertIsNone(nr.pipeline_rank(sd, "vector"))
+        self.assertIsNone(nr.pipeline_value(sd, "vector"))
+
     def test_missing_or_garbage(self):
         self.assertEqual(nr.matched_by(None), [])
         self.assertEqual(nr.matched_by({}), [])
