@@ -36,11 +36,11 @@ Uma tela só (sem sidebar, sem roteamento), dividida em **duas abas que nunca se
 | `App` | `frontend/src/App.jsx` | casca: config, status do Atlas, as duas abas, nível de acesso, tela offline |
 | `WorkspaceView` | `frontend/src/components/WorkspaceView.jsx` | um espaço de trabalho isolado: `threadId` próprio (UUID gerado no cliente), mensagens, documentos marcados (`sources`), `scope` fixo |
 | `TopBar` | `frontend/src/components/TopBar.jsx` | seletor `publico`/`restrito`, pill de status do Atlas, botão "Nova conversa", "Reconectar" |
-| `Welcome` | `frontend/src/components/Welcome.jsx` | perguntas prontas para clicar — ninguém digita ao vivo em apresentação |
+| `Welcome` | `frontend/src/components/Welcome.jsx` | 4 perguntas prontas para clicar (ninguém digita ao vivo em apresentação) e, no modo nativo, a linha de vantagens: 1 banco, 1 consulta, 0 pipelines de embedding, 0 serviços de rerank |
 | `ChatMessage` | `frontend/src/components/ChatMessage.jsx` | renderiza Markdown da resposta, token a token |
 | `ChatInput` | `frontend/src/components/ChatInput.jsx` | entrada de texto, bloqueada enquanto um turno está em andamento (`streaming`) |
-| `EngineStrip` | `frontend/src/components/EngineStrip.jsx` | **a peça central da demo.** Mostra o funil: N vetoriais + N léxicos → N fundidos (RRF) → N reranqueados, modelo de embedding/rerank, índice usado, badge de nível de acesso, latência em ms |
-| `Sources` | `frontend/src/components/Sources.jsx` | os até 8 chunks que fundamentaram a resposta — cada um com badge `VETORIAL`/`LÉXICO` (de `matched_by`), badge `restrito` se aplicável, score `vetorial → rerank` e preview do texto |
+| `EngineStrip` | `frontend/src/components/EngineStrip.jsx` | **a peça central da demo.** Mostra o funil: N vetoriais + N léxicos → `$rankFusion` → N reranqueados (no caminho clássico, N fundidos (RRF)), modelo de embedding e de rerank, badge de nível de acesso e latência em ms. Não mostra dimensão nem nome de índice: no caminho nativo o Atlas gera os vetores, então não há dimensão do lado do app |
+| `Sources` | `frontend/src/components/Sources.jsx` | os até 8 chunks que fundamentaram a resposta — cada um com badge `VETORIAL`/`LÉXICO` (de `matched_by`), badge `restrito` se aplicável, score `vetorial → rerank` (`—` no vetorial quando o chunk veio só da busca léxica) e preview do texto |
 | `DocumentsPanel` | `frontend/src/components/DocumentsPanel.jsx` | biblioteca de documentos daquela aba (`workspace = base | uploads`): drag-and-drop de upload com barra de progresso por chunk, lista de documentos com checkbox para restringir a recuperação, tag `restrito`/`base`/tempo até expirar |
 | `OfflineHero` | `frontend/src/components/OfflineHero.jsx` | tela de fallback quando `/api/config` ou o Atlas não respondem, com botão "Reconectar" |
 
@@ -77,16 +77,25 @@ O seletor `publico`/`restrito` do `TopBar` é **confiado do cliente** (não é a
 
 ## Nota sobre screenshots
 
-`docs/screenshots/` tem 4 capturas (`01-home.png`, `02-answer.png`, `03-sources.png`, `04-upload.png`), a 1600×1000, tiradas contra um tenant real. **Antes de qualquer nova captura**: o app rodando pode mostrar organização, nome de banco e conteúdo processual reais no cabeçalho, na resposta e nas passagens citadas — substitua esses nomes por valores neutros no DOM (nós de texto e placeholders) imediatamente antes de cada captura, e mantenha, abaixo das imagens no README, a nota de que os nomes foram substituídos. Isso é ainda mais crítico aqui do que em outras PoVs porque o corpus é de um tribunal e pode conter dado processual sigiloso.
+`docs/screenshots/` tem 4 capturas (recapturadas em 2026-10-02 contra o pipeline nativo, com a identidade do tenant substituída no DOM antes de cada captura, inclusive em maiúsculas) (`01-home.png`, `02-answer.png`, `03-sources.png`, `04-upload.png`), a 1600×1000, tiradas contra um tenant real. **Antes de qualquer nova captura**: o app rodando pode mostrar organização, nome de banco e conteúdo processual reais no cabeçalho, na resposta e nas passagens citadas — substitua esses nomes por valores neutros no DOM (nós de texto e placeholders) imediatamente antes de cada captura, e mantenha, abaixo das imagens no README, a nota de que os nomes foram substituídos. Isso é ainda mais crítico aqui do que em outras PoVs porque o corpus é de um tribunal e pode conter dado processual sigiloso.
 
 ## Roteiro de demo (7 passos)
 
 1. **Pergunta com termo exato** (número de norma/processo, sigla) — mostrar no `EngineStrip` que a busca lexical contribuiu.
-2. **A mesma pergunta com outras palavras** — a busca vetorial contribui, e o RRF entrega os dois ranqueamentos fundidos.
+2. **A mesma pergunta com outras palavras** — a busca vetorial contribui, e o `$rankFusion` entrega os dois ranqueamentos fundidos.
 3. **Abrir o painel de fontes** — cada resposta cita os chunks que a fundamentaram, com badge de motor (`VETORIAL`/`LÉXICO`) e scores `vetorial → rerank`. Nenhuma resposta sem procedência visível.
 4. **Alternar para `restrito`** — conteúdo que estava fora da resposta aparece. Explicar que o filtro está dentro dos dois estágios de busca, nunca aplicado depois da fusão.
 5. **Recarregar a página e retomar pelo `thread_id`** — a conversa está persistida no próprio Atlas (`conversations`), não em memória do processo.
 6. **Ingerir um documento novo** (outro formato — XLSX ou PPTX) pela CLI ou arrastando na aba `Novo conteúdo`, marcar só ele e repetir uma pergunta do documento original — o assistente diz que aquilo não está no contexto. Prova de que o filtro por `metadata.source` roda dentro das duas buscas, e é o momento em que o cliente entende que pode trazer o próprio documento (inclusive, no caso do TJGO, uma peça ou norma do próprio tribunal) para a reunião.
 7. **Trocar `CLIENT_ID` no `.env`** — outro database, outro documento, outra persona, **mesmo código rodando**. É o fecho que transforma "fizeram uma demo para um cliente" em "isto é uma plataforma".
 
-Antes de apresentar: `setup_db.py` já rodado com os dois índices `READY`; uma pergunta de aquecimento fora da demo para pagar o cold start de embedding/geração; seletor de acesso começando em `publico` (para o passo 4 ter contraste).
+Antes de apresentar: `setup_db_native.py` já rodado com os dois índices `READY` (o `autoEmbed` leva cerca de um minuto e meio para embedar o que foi inserido), `RAG_NATIVE=1` e `DB_NAME` apontando para a base nativa; uma pergunta de aquecimento fora da demo para pagar o cold start de embedding/geração; seletor de acesso começando em `publico` (para o passo 4 ter contraste).
+
+
+## Roteiro curto para mostrar o MongoDB 9
+
+1. Abrir com a tela inicial: a linha "1 banco · 1 consulta · 0 pipelines de embedding · 0 serviços de rerank" é a tese.
+2. Fazer uma pergunta e abrir **Ver query / chamada executada**: é um único `aggregate` com `$rankFusion` e `$rerank`, e os filtros de tenant e de acesso estão dentro de cada ramo.
+3. Abrir o painel de fontes: os badges `VETORIAL`/`LÉXICO` vêm do `scoreDetails` do próprio `$rankFusion`.
+4. Na aba `Novo conteúdo`, enviar um documento e perguntar sobre ele em seguida: o Atlas gera os vetores sozinho (`autoEmbed`), sem chamada de embedding no código da aplicação.
+5. Alternar para `restrito` para mostrar a ACL, e fechar com o que ainda é Preview (`autoEmbed`, `rerank-3`).

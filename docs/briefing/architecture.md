@@ -126,3 +126,13 @@ python -m unittest discover -s tests -v   # testes de lógica pura, sem Atlas/Vo
 ```
 
 Comandos completos: ver o README.
+
+
+## Resiliência verificada (2026-10-02)
+
+Bateria executada contra o cluster real e um backend vivo, com os achados:
+
+- **Vazamento de slot de concorrência** (corrigido): cada cliente que desconectava no meio do stream deixava um slot de `RAG_MAX_CONCURRENCY` preso; quatro quedas faziam a API responder 429 até reiniciar. O slot agora acompanha a thread que gera (`SlotLease` em `backend/api.py`), a geração para quando o cliente some e `tests/test_slot_lease.py` cobre a liberação única.
+- **Fuso do TTL** (corrigido): `expires_at` saía sem fuso e a UI mostrava 26 h para um TTL de 24 h em UTC-3. `backend/documents.py::iso_utc` serializa em UTC.
+- **Passou sem mudança:** entradas hostis (operadores Mongo, `$where`, prompt injection, unicode, marcadores `{}`), validação de payload, isolamento por `client_id` e por `nivel_acesso` nos dois ramos, reranker ou modelo de embedding inválido (degrada para lexical-only), banco sem índice, gateway do LLM fora do ar (erro legível em segundos), consulta sem `VOYAGE_API_KEY`.
+- **Limitação conhecida:** o `rank: "NA"` do `scoreDetails` (ramo em que o chunk não apareceu) precisa ser ignorado; só `rank` inteiro conta como acerto daquele ramo.
