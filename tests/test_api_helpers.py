@@ -12,6 +12,7 @@ os.environ.setdefault("MONGO_URI", "mongodb://localhost/test")
 os.environ.setdefault("VOYAGE_API_KEY", "test")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test")
 os.environ.setdefault("CLIENT_ID", "test-tenant")
+os.environ["RAG_NATIVE"] = "0"  # estes testes cobrem o caminho clássico; não herdam a flag do .env
 
 from backend.api import (
     ChatBody,
