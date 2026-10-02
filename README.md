@@ -12,9 +12,9 @@ The UI is in Brazilian Portuguese (used in customer sessions); code and this REA
 
 ![Home screen with the two workspace tabs, the access-profile selector, and the starter questions](docs/screenshots/01-home.png)
 
-**2. Ask.** The query becomes a `voyage-3` embedding and runs `$vectorSearch` and Atlas Search (BM25) in parallel, each already filtered by access level.
+**2. Ask.** One aggregation runs inside Atlas: Automated Embedding turns the query into a `voyage-4` vector, and `$vectorSearch` and Atlas Search (BM25) run as the two branches of a `$rankFusion`, each already filtered by access level.
 
-**3. Watch the pipeline explain itself.** RRF fuses the two rankings, `rerank-2` reorders them, the top 8 chunks become the context, and the UI shows which stage produced what.
+**3. Watch the pipeline explain itself.** `$rankFusion` fuses the two rankings, the native `$rerank` stage (`rerank-3`) reorders them, the top 8 chunks become the context, and the UI shows which stage produced what.
 
 ![Answer streaming in, with the retrieval pipeline shown stage by stage](docs/screenshots/02-answer.png)
 
@@ -22,7 +22,7 @@ The UI is in Brazilian Portuguese (used in customer sessions); code and this REA
 
 ![Expanded sources panel: one card per chunk with VECTOR/LEXICAL badges and vector → rerank scores](docs/screenshots/03-sources.png)
 
-**5. Upload a document on the spot, in a separate tab.** The screen has two spaces: **Reference corpus** (the tenant's document, read-only) and **New content**. In the second tab, drag in a file: it is chunked, embedded with `voyage-3`, and indexed in the tenant's same database, with a progress bar. Each tab has its own conversation and only retrieves its own documents: `/api/chat` resolves that scope on the server, so an answer never mixes the two corpora. Both search filters gain `metadata.source` alongside the access level. Content uploaded this way is disposable: it expires on its own in 24h through a TTL index, and that TTL mark is what separates the two tabs, with no new database and no new index.
+**5. Upload a document on the spot, in a separate tab.** The screen has two spaces: **Reference corpus** (the tenant's document, read-only) and **New content**. In the second tab, drag in a file: it is chunked and indexed (Atlas generates the `voyage-4` embeddings through the `autoEmbed` index) in the tenant's same database, with a progress bar. Each tab has its own conversation and only retrieves its own documents: `/api/chat` resolves that scope on the server, so an answer never mixes the two corpora. Both search filters gain `metadata.source` alongside the access level. Content uploaded this way is disposable: it expires on its own in 24h through a TTL index, and that TTL mark is what separates the two tabs, with no new database and no new index.
 
 ![New content tab: upload panel open, the uploaded document with its expiry, and an answer generated only from it](docs/screenshots/04-upload.png)
 
@@ -34,13 +34,17 @@ The UI is in Brazilian Portuguese (used in customer sessions); code and this REA
 graph TD
     User([User]) <-->|Chat / SSE| UI[React + LeafyGreen]
     UI <-->|HTTP /api| API[FastAPI]
-    API -->|query| EMB[voyage-3 embedding]
-    EMB --> VS[Atlas Vector Search + ACL filter]
-    API --> LX[Atlas Search BM25 + ACL filter]
-    VS --> RRF[Reciprocal Rank Fusion]
-    LX --> RRF
-    RRF --> RNK[rerank-2]
-    RNK --> LLM[Claude Sonnet 4.6]
+    API -->|one aggregation| AGG
+    subgraph AGG[MongoDB Atlas 9 · single aggregation]
+        VS[Vector Search · autoEmbed voyage-4 + ACL filter]
+        LX[Atlas Search BM25 + ACL filter]
+        RRF[$rankFusion]
+        RNK[$rerank · rerank-3]
+        VS --> RRF
+        LX --> RRF
+        RRF --> RNK
+    end
+    RNK --> LLM[Claude Sonnet 4.6 via gateway]
     LLM -->|token streaming| API
     API <-->|conversation| MDB[(Atlas · conversations)]
 ```
@@ -85,6 +89,31 @@ The TTL sets `metadata.expires_at` **only** on chunks uploaded through the UI. T
 Uploads run on a single worker: the same VoyageAI quota limits ingestion, so jobs queue instead of competing. A large document takes minutes on the free tier; in a live demo prefer small files or a paid key with a low `VOYAGE_SLEEP_S`.
 
 Tests: `python -m unittest discover -s tests -v` (pure logic, no live services). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
+
+## Native retrieval on MongoDB 9
+
+Embedding, fusion, and rerank run inside Atlas, in a single aggregation (`native_retrieval.py`):
+
+```
+$rankFusion { vector: $vectorSearch (autoEmbed, voyage-4), lexical: $search (BM25) }
+  -> $match (text present) -> $rerank (rerank-3) -> $limit 8
+```
+
+- **Automated Embedding** (`autoEmbed` index on `text`, preview): no client-side embedding and no embedding rate limit at ingestion; the app never sends vectors.
+- **`$rankFusion`** replaces the Python RRF, and its `scoreDetails` keep the per-chunk `VECTOR` / `LEXICAL` badges.
+- **`$rerank`** replaces the SDK rerank call, with no separate API key or extra network hop. `rerank-3` is a preview and needs a dedicated M10+ cluster on MongoDB 9.0+; `NATIVE_RERANK_MODEL=rerank-2.5` works elsewhere.
+- Generation is unchanged: the retrieved chunks still go to Claude through the gateway.
+
+Setup (`RAG_NATIVE=1`, a fresh database): `python setup_db_native.py`, then `python ingest.py <file>` (it skips client-side embedding in this mode). Same golden set, same 303 chunks, k=15, 38 answerable questions:
+
+| path | recall@1 | recall@8 | MRR | nDCG@8 | retrieval latency |
+|---|---|---|---|---|---|
+| classic: `voyage-3` + RRF + `rerank-2` | 0.842 | 0.974 | 0.901 | 0.920 | 852 ms |
+| native: `voyage-4` + `$rankFusion` + `rerank-3` | 0.868 | 1.000 | 0.919 | 0.939 | 743 ms |
+| native, vector only (no rerank) | 0.737 | 1.000 | 0.842 | 0.882 | 539 ms |
+| classic, vector only (no rerank) | 0.658 | 0.947 | 0.761 | 0.807 | 833 ms |
+
+The embedding upgrade is the clearest gain (+8 points of recall@1 without rerank). With rerank the difference is one question out of 38, which is within noise, and `rerank-3` ties `rerank-2.5` on this set. With two more documents indexed as distractors (701 chunks) recall@1 is 0.789 and recall@8 stays at 1.000. The lexical branch helps before the rerank (+2.6 points of recall@1) and ties the vector branch after it.
 
 ## Quality and governance
 

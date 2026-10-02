@@ -13,7 +13,7 @@ Critério que define "arquitetura certa" aqui: adicionar um tenant novo = novos 
 | Camada | Tecnologia | Onde |
 |---|---|---|
 | Banco / busca | MongoDB Atlas (Vector Search + Atlas Search/BM25) | `db.py`, `setup_db.py` |
-| Embeddings + rerank | VoyageAI (`voyage-3`, 1024d; `rerank-2`) | `agent.py`, `ingest.py` |
+| Embeddings + rerank | Nativo no Atlas (`RAG_NATIVE=1`): Automated Embedding `voyage-4`, `$rankFusion`, `$rerank` `rerank-3`. Caminho clássico: VoyageAI `voyage-3` + `rerank-2` via SDK | `native_retrieval.py`, `agent.py`, `ingest.py` |
 | Geração | Claude (`claude-sonnet-4-6`) via `langchain_anthropic.ChatAnthropic`, atrás de um gateway configurável (ver `ANTHROPIC_BASE_URL` no `.env`) | `backend/api.py` |
 | API | FastAPI, streaming SSE | `backend/api.py` |
 | Frontend | React + Vite + LeafyGreen (design system MongoDB) | `frontend/src/` |
@@ -26,11 +26,15 @@ Usuário digita/clica pergunta na UI
   → POST /api/chat (SSE)
   → backend/api.py resolve escopo (workspace/tenant/ACL)
   → agent.py::retrieve_context(query)
-       1. embed da pergunta (voyage-3, com cache LRU + timeout)
-       2. busca vetorial ($vectorSearch) e busca lexical ($search) EM PARALELO,
-          cada uma filtrada por client_id + nivel_acesso + source
-       3. Reciprocal Rank Fusion (RRF, k=60) funde os dois ranqueamentos
-       4. rerank-2 (VoyageAI) reordena o conjunto fundido, mantém top 8
+       Caminho nativo (RAG_NATIVE=1), um único aggregation no Atlas:
+       1. $rankFusion com dois ramos: $vectorSearch (autoEmbed voyage-4: o Atlas
+          embeda a pergunta) e $search (BM25), cada um filtrado por client_id +
+          nivel_acesso + source
+       2. $rerank (rerank-3) reordena o conjunto fundido; $limit 8
+       3. scoreDetails devolve o ramo (e o score bruto) de cada chunk: alimenta os badges
+          Falha do Atlas degrada para lexical-only (native_degraded)
+       Caminho clássico (RAG_NATIVE=0): embed voyage-3 com cache LRU, $vectorSearch e
+       $search em paralelo, RRF k=60 em Python, rerank-2 pelo SDK da Voyage
   → backend monta SystemMessage/HumanMessage/AIMessage (à mão, sem template)
   → Claude gera a resposta em streaming (SSE: meta → token* → done)
   → UI mostra EngineStrip + Sources (evidência) ANTES do texto, depois o

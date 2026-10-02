@@ -8,6 +8,34 @@ Total nesta versão: **9 aggregation pipelines / operações de leitura ou escri
 
 ---
 
+## Pipeline nativo (RAG_NATIVE=1)
+
+**Onde:** `native_retrieval.py::build_native_pipeline`. Um único aggregation substitui as duas buscas, o RRF em Python e o rerank pelo SDK.
+
+```python
+[
+  {"$rankFusion": {"input": {"pipelines": {
+      "vector":  [{"$vectorSearch": {"index": "vector_index", "path": "text", "query": "<pergunta>",
+                   "model": "voyage-4", "numCandidates": 225, "limit": 15,
+                   "filter": {"$and": [{"metadata.client_id": "tenant-x"},
+                                       {"metadata.nivel_acesso": {"$in": ["publico"]}}]}}}],
+      "lexical": [{"$search": {"index": "text_index", "compound": {
+                   "must": [{"text": {"query": "<pergunta>", "path": "text"}}],
+                   "filter": [{"in": {"path": "metadata.client_id", "value": ["tenant-x"]}}]}}},
+                  {"$limit": 15}]}},
+    "scoreDetails": True}},
+  {"$set": {"fusion_score": {"$meta": "score"}, "score_details": {"$meta": "scoreDetails"}}},
+  {"$match": {"text": {"$type": "string", "$ne": ""}}},      # $rerank falha se o campo não existir
+  {"$rerank": {"model": "rerank-3", "query": {"text": "<pergunta>"}, "path": "text", "numDocsToRerank": 30}},
+  {"$set": {"rerank_score": {"$meta": "score"}}},
+  {"$limit": 8},
+]
+```
+
+**Índice `vector_index` do caminho nativo** (`setup_db_native.py`): `{"type": "autoEmbed", "modality": "text", "path": "text", "model": "voyage-4"}` mais os três `filter` (`nivel_acesso`, `source`, `client_id`). Não há campo `embedding` nos documentos.
+
+**Observação de `scoreDetails`:** o ramo em que o chunk não apareceu vem com `rank: "NA"` e `value: 0`; só `rank` inteiro conta como acerto daquele ramo.
+
 ## Índices
 
 ### 1. `vector_index` — Atlas Vector Search
