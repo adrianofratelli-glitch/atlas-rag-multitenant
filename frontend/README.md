@@ -15,6 +15,6 @@ backend e a configuração do MongoDB Atlas.
 
 - `src/App.jsx` — estado da aplicação e orquestração
 - `src/api.js` — requisições de config/status e o stream SSE do chat
-- `src/components/` — componentes de UI (TopBar, ChatMessage, EngineStrip, Sources; Sidebar e KpiRow são legados fora do shell atual)
+- `src/components/` — componentes de UI (TopBar, ChatMessage, EngineStrip, Sources, ArchitecturePanel + ArchitectureFunnel ao lado do chat, ArchitectureModal; Sidebar e KpiRow são legados fora do shell atual)
 - `src/index.css` — estilos globais e tokens de design
 - `src/theme.js` — paleta de cores

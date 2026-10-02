@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.2.0 (2026-10-02)
+
+Shows why one database is enough.
+
+- Architecture drawing (`docs/architecture/one-database.svg`): a typical RAG stack (OLTP database, ETL/CDC, search engine, vector database, embedding and rerank APIs) next to this PoV, where embedding, lexical and vector search, fusion and rerank run in one aggregation on one Atlas cluster. In the README and the briefing.
+- UI: a side panel beside the chat (screens 1280 px and wider) draws the same pipeline and follows each question. While the aggregation runs the candidates pulse in both branches; afterwards a 10 s loop replays it with that question's real sizes: 15 + 15 candidates, `$rankFusion`, `$rerank` over up to 30, and only 8 through `$limit`, coloured by the branch that found them. Before the first question it stays still. Narrow screens get a "ver arquitetura" modal instead.
+- Native stats now carry the funnel sizes as sent in the pipeline (`branch_limit`, `rerank_candidates`, `final_n`).
+- UI: the engine strip reads "1 aggregation no Atlas" on the native path, and per-turn latency is no longer shown on screen (still in the SSE `meta` event and `/api/metrics`).
+
 ## 1.1.0 (2026-10-02)
 
 Retrieval moves into MongoDB Atlas 9.
