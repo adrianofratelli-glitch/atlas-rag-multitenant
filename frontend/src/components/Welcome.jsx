@@ -36,7 +36,7 @@ export default function Welcome({ config, onPick }) {
             <span><b>1</b> consulta</span>
             <span><b>0</b> pipelines de embedding</span>
             <span><b>0</b> serviços de rerank</span>
-            <button type="button" className="arch-link" onClick={() => setShowArch(true)}>ver a arquitetura</button>
+            <button type="button" className="arch-link arch-link-narrow" onClick={() => setShowArch(true)}>ver a arquitetura</button>
           </div>
         )}
         {showArch && <ArchitectureModal onClose={() => setShowArch(false)} />}

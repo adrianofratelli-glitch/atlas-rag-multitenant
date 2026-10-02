@@ -5,6 +5,7 @@ import Welcome from './Welcome'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
 import DocumentsPanel from './DocumentsPanel'
+import ArchitecturePanel from './ArchitecturePanel'
 
 const uuid = () => {
   if (crypto.randomUUID) return crypto.randomUUID()
@@ -84,9 +85,12 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
   const last = messages[messages.length - 1]
   const showFollowups = !streaming && last?.role === 'assistant' && last.followups?.length > 0
   const scopeLabel = sources.length ? sources.join(', ') : panel.subject
+  const lastAnswer = [...messages].reverse().find((m) => m.role === 'assistant' && m.stats)
+  const phase = streaming ? (last?.stats ? 'generating' : 'retrieving') : lastAnswer ? 'done' : 'idle'
 
   return (
-    <>
+    <div className={config.native ? 'ws-layout' : undefined}>
+    <div className="ws-chat">
       {error && (
         <Banner darkMode variant="danger" dismissible onClose={() => setError(null)} style={{ marginBottom: 14 }}>
           {error}
@@ -129,6 +133,14 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
 
       <div ref={endRef} />
       <ChatInput placeholder={`Pergunte sobre ${scopeLabel}…`} disabled={streaming} onSend={send} />
-    </>
+    </div>
+    {config.native && (
+      <ArchitecturePanel
+        phase={phase}
+        stats={streaming ? last?.stats : lastAnswer?.stats}
+        elapsedMs={streaming ? last?.elapsedMs : lastAnswer?.elapsedMs}
+      />
+    )}
+    </div>
   )
 }

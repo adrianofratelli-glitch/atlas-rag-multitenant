@@ -34,7 +34,7 @@ On MongoDB 9 the retrieval half of a RAG system collapses into the database. Her
 
 ![Typical RAG stack with six separate systems and two sync pipelines, next to this PoV, where embedding, lexical and vector search, fusion and rerank run in one aggregation on one Atlas cluster](docs/architecture/one-database.svg)
 
-The same drawing is in the app: **ver arquitetura**, on the welcome screen or on the retrieval strip under each answer, opens it with that question's numbers (how many of the final chunks came from each branch, retrieval time, access filter applied).
+The same drawing lives in the app, in a panel beside the chat (screens 1280 px and wider) that lights up with each question: the Atlas stages pulse while the aggregation runs, then show how many of the final chunks came from each branch, the retrieval time and the access filter applied, and the Claude box lights while the answer streams. On narrower screens the panel gives way to a **ver arquitetura** link that opens the same drawing.
 
 | | classic path | native path (MongoDB 9) |
 |---|---|---|

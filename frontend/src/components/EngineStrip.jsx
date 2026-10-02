@@ -66,8 +66,8 @@ export default function EngineStrip({ stats, elapsedMs }) {
         )}
         {native && (
           <>
-            <span>|</span>
-            <button type="button" className="arch-link" onClick={() => setShowArch(true)}>ver arquitetura</button>
+            <span className="arch-link-narrow">|</span>
+            <button type="button" className="arch-link arch-link-narrow" onClick={() => setShowArch(true)}>ver arquitetura</button>
           </>
         )}
       </span>
