@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
-// Animated funnel of the native aggregation, looped every 10 s:
+// Animated funnel of the native aggregation, looped every 10 s after a question:
 // each branch returns its candidates -> $rankFusion merges them (a chunk found
 // by both branches becomes one) -> $rerank reorders -> $limit lets only the
 // final ones through -> they go to the prompt.
@@ -13,7 +13,7 @@ const W = 256
 const PITCH = 12
 const LOOP_MS = 10000
 const STEPS = [[100, 1], [2000, 2], [4000, 3], [6000, 4], [8000, 5], [9300, 0]]
-// Shown before the first question; the caption says it is an example.
+// Placeholder shape before the first question (only the branch frame is drawn then).
 const DEMO_FINAL = ['both', 'both', 'vector', 'both', 'lexical', 'both', 'vector', 'both']
 
 const kindOf = (matchedBy = []) => {
@@ -71,7 +71,7 @@ function buildModel(stats, sources) {
   return {
     k, lexK, finalN: finals.length || finalN, rerankN: Math.min(rerankN, fusedOrder.length),
     merged: entities.filter((e) => e.parts.length > 1).length,
-    dots: Object.values(dots), demo: !(stats && sources?.length),
+    dots: Object.values(dots),
   }
 }
 
@@ -93,8 +93,11 @@ export default function ArchitectureFunnel({ stats, sources, searching, rerankMo
   const still = reducedMotion()
   const [step, setStep] = useState(still ? 4 : 0)
 
+  // Loops only after a question: before the first one the funnel stays still.
+  const idle = !searching && !(stats && sources?.length)
+
   useEffect(() => {
-    if (still || searching) return undefined
+    if (still || searching || idle) return undefined
     let timers = []
     const run = () => {
       timers = STEPS.map(([at, s]) => setTimeout(() => setStep(s), at))
@@ -102,10 +105,12 @@ export default function ArchitectureFunnel({ stats, sources, searching, rerankMo
     }
     run()
     return () => timers.forEach(clearTimeout)
-  }, [still, searching, model])
+  }, [still, searching, idle, model])
 
-  const shown = searching ? 1 : step
-  const caption = searching
+  const shown = searching || idle ? 1 : step
+  const caption = idle
+    ? 'Faça uma pergunta: o funil roda com os números dela.'
+    : searching
     ? 'Os dois ramos buscam em paralelo…'
     : [
         'Reiniciando…',
@@ -135,7 +140,7 @@ export default function ArchitectureFunnel({ stats, sources, searching, rerankMo
               className={`af-dot ${dot.kind}${dot.merged && shown >= 2 && dot.kind === 'lexical' ? ' half' : ''}${searching ? ' pulse' : ''}${shown === 0 ? ' reset' : ''}`}
               style={{
                 transform: `translate(${p.x}px, ${p.y}px) scale(${p.s})`,
-                opacity: p.o,
+                opacity: idle ? p.o * 0.3 : p.o,
                 transitionDelay: shown === 1 ? `${i * 18}ms` : shown === 2 ? `${(i % 10) * 25}ms` : '0ms',
               }}
             />
@@ -147,7 +152,6 @@ export default function ArchitectureFunnel({ stats, sources, searching, rerankMo
         <span><i className="af-dot vector static" />vetorial</span>
         <span><i className="af-dot lexical static" />léxico</span>
         <span><i className="af-dot vector static both" />os dois</span>
-        {model.demo && !searching && <em>exemplo</em>}
       </div>
     </div>
   )

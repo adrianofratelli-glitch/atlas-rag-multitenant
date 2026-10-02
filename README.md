@@ -34,7 +34,7 @@ On MongoDB 9 the retrieval half of a RAG system collapses into the database. Her
 
 ![Typical RAG stack with six separate systems and two sync pipelines, next to this PoV, where embedding, lexical and vector search, fusion and rerank run in one aggregation on one Atlas cluster](docs/architecture/one-database.svg)
 
-The same drawing lives in the app, in a panel beside the chat (screens 1280 px and wider) that follows each question. While the aggregation runs the candidates pulse in both branches; afterwards a 10-second loop replays it with that question's real sizes: 15 candidates from `$vectorSearch` and 15 from `$search`, merged by `$rankFusion` (a chunk found by both branches becomes one), reordered by `$rerank`, and only 8 let through by `$limit`, each coloured by the branch that actually found it. On narrower screens the panel gives way to a **ver arquitetura** link that opens the same drawing.
+The same drawing lives in the app, in a panel beside the chat (screens 1280 px and wider) that follows each question. While the aggregation runs the candidates pulse in both branches; once the answer is in, a 10-second loop (which only starts after the first question) replays it with that question's real sizes: 15 candidates from `$vectorSearch` and 15 from `$search`, merged by `$rankFusion` (a chunk found by both branches becomes one), reordered by `$rerank`, and only 8 let through by `$limit`, each coloured by the branch that actually found it. On narrower screens the panel gives way to a **ver arquitetura** link that opens the same drawing.
 
 | | classic path | native path (MongoDB 9) |
 |---|---|---|
