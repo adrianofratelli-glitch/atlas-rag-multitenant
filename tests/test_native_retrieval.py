@@ -154,6 +154,13 @@ class TestRunNative(unittest.TestCase):
         self.assertIn("$search", col.calls[1][0])
         self.assertEqual(res[0]["matched_by"], {"léxico"})
 
+    def test_rows_without_text_or_metadata_are_skipped_not_fatal(self):
+        bad = [{"_id": "x1", "metadata": {}}, {"_id": "x2", "text": "", "metadata": {}},
+               {"_id": "x3", "text": "ok"}, ROW]
+        res, info = nr.run_native(FakeCol(bad), "q", 15, ["publico"], None, 8, use_rerank=False)
+        self.assertEqual([r["chunk_id"] for r in res], ["c1"])
+        self.assertFalse(info["degraded"])
+
     def test_total_failure_returns_empty_not_raise(self):
         class Dead:
             def aggregate(self, p):

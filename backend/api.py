@@ -26,6 +26,7 @@ from typing import Literal
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field, model_validator
 from dotenv import load_dotenv
 
@@ -163,6 +164,31 @@ MAX_HISTORY_MESSAGES = 16
 MAX_HISTORY_CHARS = int(os.getenv("MAX_HISTORY_CHARS", "48000"))
 MAX_OUTLINE_CHARS = int(os.getenv("MAX_OUTLINE_CHARS", "12000"))
 _chat_slots = BoundedSemaphore(max(1, int(os.getenv("RAG_MAX_CONCURRENCY", "4"))))
+
+
+class ClientGone(Exception):
+    """O cliente do SSE desconectou; a geração em andamento deve parar."""
+
+
+class SlotLease:
+    """Libera um slot de concorrência exatamente uma vez, por quem terminar primeiro.
+
+    Quando o cliente cai no meio do stream o gerador do SSE fica suspenso e o `finally` dele
+    nunca roda; liberar só ali vazava um slot por desconexão (4 quedas = API devolvendo 429 até
+    reiniciar). O slot mede a geração em andamento, então a thread que gera também o libera.
+    """
+
+    def __init__(self, sem: BoundedSemaphore):
+        self._sem = sem
+        self._lock = threading.Lock()
+        self._held = True
+
+    def release(self) -> None:
+        with self._lock:
+            if not self._held:
+                return
+            self._held = False
+        self._sem.release()
 
 # Stack metadata (surfaced in the UI)
 EMBED_MODEL = NATIVE_EMBED_MODEL if NATIVE_ENABLED else "voyage-3"
@@ -548,6 +574,9 @@ def api_chat(body: ChatBody):
         return StreamingResponse(scope_gen(), media_type="text/event-stream")
     if not _chat_slots.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="RAG concurrency limit reached; retry shortly")
+    lease = SlotLease(_chat_slots)
+    turn = {"worker_started": False}
+    client_gone = threading.Event()
 
     def gen():
         try:
@@ -585,6 +614,9 @@ def api_chat(body: ChatBody):
             _DONE = object()
 
             def _emit(event):
+                if client_gone.is_set():
+                    # Ninguém está lendo: interrompe a geração em vez de gastar tokens à toa.
+                    raise ClientGone()
                 event_queue.put(event)
 
             def _worker():
@@ -603,9 +635,11 @@ def api_chat(body: ChatBody):
                 except Exception as exc:  # noqa: BLE001 — repassa pro consumidor, não derruba a thread
                     event_queue.put(("_error", exc))
                 finally:
+                    lease.release()  # a geração terminou: libera mesmo que o cliente já tenha ido embora
                     event_queue.put(_DONE)
 
             worker = threading.Thread(target=_worker, daemon=True)
+            turn["worker_started"] = True
             worker.start()
             final_state = {}
             worker_error = None
@@ -641,6 +675,15 @@ def api_chat(body: ChatBody):
                 }
             )
         finally:
-            _chat_slots.release()
+            if not turn["worker_started"]:
+                lease.release()
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    def _on_response_end():
+        # Roda quando a resposta termina, inclusive por desconexão do cliente: interrompe a geração
+        # e, se o gerador nem começou (o `finally` dele ainda não existe), devolve o slot.
+        client_gone.set()
+        if not turn["worker_started"]:
+            lease.release()
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             background=BackgroundTask(_on_response_end))

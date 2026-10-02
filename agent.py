@@ -32,12 +32,14 @@ VOYAGE_RETRY_BASE_S = float(os.getenv("VOYAGE_RETRY_BASE_S", "0.5"))
 # Filtro heurístico de prompt injection nos trechos recuperados (opt-in). Não é controle
 # absoluto: o controle real é o filtro metadata.client_id, inescapável nas pipelines.
 INJECTION_FILTER = os.getenv("RAG_INJECTION_FILTER", "0") == "1"
-# Recusa explícita sem evidência suficiente (opt-in). Score do rerank-2 abaixo do piso = recusa.
-# Piso 0.6 escolhido no split `calib` do golden e confirmado no split `test`, que é o avaliado
-# (eval/reports/retrieval.md): 0/19 falsas recusas e 3/4 recusas devidas no `test`. O golden é
-# sintético, então recalibre com perguntas reais antes de confiar nele em produção.
+# Recusa explícita sem evidência suficiente (opt-in). Score do reranker abaixo do piso = recusa.
+# O piso é escolhido no split `calib` do golden e confirmado no split `test`, que é o avaliado:
+#   rerank-2 (caminho clássico): 0.6  -> 0/19 falsas recusas e 3/4 recusas devidas no `test`
+#   rerank-3 (nativo, 701 chunks): 0.65 -> 0/19 falsas recusas e 4/4 recusas devidas no `test`
+# A escala dos scores muda com o modelo, então o piso acompanha o caminho. O golden é sintético:
+# recalibre com perguntas reais antes de confiar nele em produção.
 REFUSE_WEAK_EVIDENCE = os.getenv("RAG_REFUSE_WEAK_EVIDENCE", "0") == "1"
-MIN_RERANK_SCORE = float(os.getenv("RAG_MIN_RERANK_SCORE", "0.6"))
+MIN_RERANK_SCORE = float(os.getenv("RAG_MIN_RERANK_SCORE", "0.65" if NATIVE_ENABLED else "0.6"))
 
 
 def _get_voyage() -> voyageai.Client:

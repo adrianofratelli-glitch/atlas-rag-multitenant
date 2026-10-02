@@ -114,6 +114,12 @@ def _to_internal(row, *, lexical_only=False):
     }
 
 
+def _usable(rows, *, lexical_only=False):
+    """Descarta linhas sem texto ou metadata (sem `$rerank` nada garante o campo) em vez de falhar o turno."""
+    return [_to_internal(r, lexical_only=lexical_only) for r in rows
+            if isinstance(r.get("text"), str) and r["text"] and isinstance(r.get("metadata"), dict)]
+
+
 def run_native(collection, query, top_k, levels, sources, final_n,
                *, use_lexical=True, use_rerank=True):
     """Executa o aggregation nativo. Falha do Atlas degrada para lexical-only; nunca levanta."""
@@ -121,13 +127,13 @@ def run_native(collection, query, top_k, levels, sources, final_n,
                                      use_lexical=use_lexical, use_rerank=use_rerank)
     try:
         rows = list(collection.aggregate(pipeline))
-        return [_to_internal(r) for r in rows], {"degraded": False, "pipeline": pipeline}
+        return _usable(rows), {"degraded": False, "pipeline": pipeline}
     except Exception:
         logger.exception("native pipeline failed — falling back to lexical-only")
     try:
         fallback = _lexical_fallback(query, top_k, levels, sources, final_n)
         rows = list(collection.aggregate(fallback))
-        return [_to_internal(r, lexical_only=True) for r in rows], {"degraded": True, "pipeline": fallback}
+        return _usable(rows, lexical_only=True), {"degraded": True, "pipeline": fallback}
     except Exception:
         logger.exception("lexical fallback failed too")
         return [], {"degraded": True, "pipeline": pipeline}
