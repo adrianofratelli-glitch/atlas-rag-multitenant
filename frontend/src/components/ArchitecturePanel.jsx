@@ -18,7 +18,6 @@ export default function ArchitecturePanel({ phase, stats, sources }) {
   const [expanded, setExpanded] = useState(false)
   const live = phase === 'generating' || phase === 'done'
   const degraded = Boolean(stats?.native_degraded)
-  const final = stats?.final_n ?? stats?.reranked ?? 8
   const levels = stats?.access_levels || []
   const acl = levels.includes('restrito') ? 'publico + restrito' : 'publico'
   const rerm = stats?.rerank_model || 'rerank-3'
@@ -51,7 +50,7 @@ export default function ArchitecturePanel({ phase, stats, sources }) {
         </div>
       </div>
 
-      <div className={`ap-link ${live ? 'lit' : ''}`}><span>{final} chunks</span></div>
+      <div className={`ap-link ${live ? 'lit' : ''}`} />
       <div className={`ap-node ${phase === 'generating' ? 'pulse' : phase === 'done' ? 'lit' : ''}`}>
         <strong>Claude via gateway</strong><span>só a geração sai do banco</span>
       </div>
