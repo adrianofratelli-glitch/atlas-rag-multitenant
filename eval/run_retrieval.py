@@ -8,6 +8,7 @@ Chamadas ao Atlas/Voyage são cacheadas em eval/reports/retrieval_cache.json (--
 """
 import argparse
 import json
+import os
 import sys
 import time
 
@@ -25,7 +26,12 @@ MODES = {
     "d_hybrid_no_rerank": dict(use_lexical=True, use_rerank=False),
 }
 FINAL_N = 8
-CACHE = REPORTS / "retrieval_cache.json"
+# EVAL_TAG separa cache e relatórios de execuções com configurações diferentes
+# (ex.: EVAL_TAG=_native com RAG_NATIVE=1 e DB_NAME do banco v2), sem sobrescrever o baseline.
+TAG = os.getenv("EVAL_TAG", "")
+# EVAL_SOURCES=a,b restringe a recuperação a esses documentos (compara corpora de tamanhos diferentes no mesmo conteúdo).
+SOURCES = [x for x in os.getenv("EVAL_SOURCES", "").split(",") if x] or None
+CACHE = REPORTS / f"retrieval_cache{TAG}.json"
 
 
 def collect(rows, ks, refresh):
@@ -46,7 +52,8 @@ def collect(rows, ks, refresh):
                     continue
                 cap = []
                 t0 = time.perf_counter()
-                _, _, stats = agent.retrieve_context(r["question"], top_k=k, final_n=FINAL_N, _capture=cap, **kw)
+                _, _, stats = agent.retrieve_context(r["question"], top_k=k, final_n=FINAL_N, _capture=cap,
+                                                     sources=SOURCES, **kw)
                 cache[key] = {
                     "question": r["question"],  # trava: o cache é por id, e id só vale com a mesma pergunta
                     "ms": int((time.perf_counter() - t0) * 1000),
@@ -65,7 +72,7 @@ def main():
     ap.add_argument("--ks", default="15")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--refresh", action="store_true")
-    ap.add_argument("--out", default=str(REPORTS / "retrieval.md"))
+    ap.add_argument("--out", default=str(REPORTS / f"retrieval{TAG}.md"))
     a = ap.parse_args()
     ks = [int(x) for x in a.ks.split(",")]
     every = load_golden()
@@ -157,7 +164,7 @@ def main():
     if best:
         md.append(f"\nMaior piso sem falsa recusa no `calib`: **{best[0]}** "
                   f"({best[1]}/{len(bad_c)} recusas devidas). É o valor sugerido para `RAG_MIN_RERANK_SCORE`.")
-    pathlib = REPORTS / "retrieval_results.json"
+    pathlib = REPORTS / f"retrieval_results{TAG}.json"
     pathlib.write_text(json.dumps({str(k): v for k, v in out.items()}, ensure_ascii=False, default=str))
     open(a.out, "w", encoding="utf-8").write("\n".join(md) + "\n")
     print("\n".join(md))

@@ -99,7 +99,7 @@ export default function App() {
   const uploadsConfig = {
     ...config,
     document_title: 'conteúdo que você enviou',
-    document_description: 'Mesma esteira do corpus de referência — chunk, voyage-3, Atlas Vector Search — sobre o documento enviado nesta aba.',
+    document_description: 'Mesma esteira do corpus de referência — chunk, embedding, Atlas Vector Search — sobre o documento enviado nesta aba.',
     questions: [],
   }
 

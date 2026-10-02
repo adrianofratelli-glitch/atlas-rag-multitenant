@@ -1,6 +1,6 @@
 import { C } from '../theme'
 
-// Atlas hybrid-search showcase: vector + lexical -> RRF -> rerank-2, with metadata.
+// Atlas hybrid-search showcase: vector + lexical -> fusion -> rerank, with metadata.
 export default function EngineStrip({ stats, elapsedMs }) {
   if (!stats) return null
   const vec = stats.vector_hits ?? '—'
@@ -12,6 +12,7 @@ export default function EngineStrip({ stats, elapsedMs }) {
   const embm = stats.embed_model ?? 'voyage-3'
   const rerm = stats.rerank_model ?? 'rerank-2'
   const hybrid = stats.hybrid
+  const native = Boolean(stats.native)
   const levels = stats.access_levels || []
   const restrito = levels.includes('restrito')
 
@@ -22,7 +23,7 @@ export default function EngineStrip({ stats, elapsedMs }) {
       </span>
 
       <span style={{ fontSize: 11, color: C.text }}>
-        <span className="hint" title="documentos retornados pelo $vectorSearch (similaridade de cosseno, voyage-3)">
+        <span className="hint" title={`documentos retornados pelo $vectorSearch (similaridade de cosseno, ${embm})`}>
           {vec} vetoriais
         </span>
         {hybrid && (
@@ -34,11 +35,11 @@ export default function EngineStrip({ stats, elapsedMs }) {
           </>
         )}
         <span style={{ color: C.muted }}> → </span>
-        <span className="hint" title="candidatos únicos após Reciprocal Rank Fusion (RRF) das duas modalidades">
-          {fused} fundidos{hybrid ? ' (RRF)' : ''}
+        <span className="hint" title={native ? 'fusão por Reciprocal Rank Fusion feita pelo $rankFusion, dentro do Atlas' : 'candidatos únicos após Reciprocal Rank Fusion (RRF) das duas modalidades'}>
+          {native ? '$rankFusion' : `${fused} fundidos${hybrid ? ' (RRF)' : ''}`}
         </span>
         <span style={{ color: C.muted }}> → </span>
-        <strong className="hint" style={{ color: C.green }} title="documentos mantidos após reordenação por relevância (rerank-2 · VoyageAI)">
+        <strong className="hint" style={{ color: C.green }} title={`documentos mantidos após reordenação por relevância (${rerm} · VoyageAI${native ? ', $rerank nativo no Atlas' : ''})`}>
           {rer} reranqueados
         </strong>
       </span>

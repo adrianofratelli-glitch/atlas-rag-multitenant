@@ -41,6 +41,9 @@ from config import (
     DOCUMENT_TITLE,
     DOCUMENT_DESCRIPTION,
     DB_NAME,
+    NATIVE_ENABLED,
+    NATIVE_EMBED_MODEL,
+    NATIVE_RERANK_MODEL,
     QUESTIONS,
     FOLLOWUPS,
     DEFAULT_FOLLOWUPS,
@@ -162,9 +165,9 @@ MAX_OUTLINE_CHARS = int(os.getenv("MAX_OUTLINE_CHARS", "12000"))
 _chat_slots = BoundedSemaphore(max(1, int(os.getenv("RAG_MAX_CONCURRENCY", "4"))))
 
 # Stack metadata (surfaced in the UI)
-EMBED_MODEL = "voyage-3"
+EMBED_MODEL = NATIVE_EMBED_MODEL if NATIVE_ENABLED else "voyage-3"
 EMBED_DIM = 1024
-RERANK_MODEL = "rerank-2"
+RERANK_MODEL = NATIVE_RERANK_MODEL if NATIVE_ENABLED else "rerank-2"
 VECTOR_INDEX = "vector_index"
 
 # Strip a leading emoji from configured question/follow-up strings
