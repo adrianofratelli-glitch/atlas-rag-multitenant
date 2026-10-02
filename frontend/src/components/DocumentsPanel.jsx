@@ -150,7 +150,7 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
             {ttlHours > 0 && (
               <span className="docs-hint">
                 Conteúdo de demo: os chunks enviados aqui expiram sozinhos em {ttlHours}h.
-                O documento pré-carregado do tenant não expira.
+                Os documentos pré-carregados não expiram.
               </span>
             )}
             <input

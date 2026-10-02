@@ -391,3 +391,7 @@ body::after {
 .ws-tabs button:hover { color: var(--text); }
 .ws-tabs button.active { color: var(--text); border-bottom-color: var(--green, #00ED64); }
 .ws-tabs button:focus-visible { outline: 2px solid var(--green, #00ED64); outline-offset: -2px; }
+
+/* Vantagens da arquitetura nativa (hero) */
+.stack-points { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 14px; font-size: 12px; color: var(--muted, #9db2bd); letter-spacing: .02em; }
+.stack-points b { font-family: var(--pov-font-mono, 'Source Code Pro', monospace); color: var(--green); font-size: 14px; margin-right: 4px; }

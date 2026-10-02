@@ -405,6 +405,7 @@ def api_config():
         "document_description": DOCUMENT_DESCRIPTION,
         "db_name": DB_NAME,
         "questions": [_clean(q) for q in QUESTIONS[:8]],
+        "native": NATIVE_ENABLED,
         "embed_model": EMBED_MODEL,
         "embed_dim": EMBED_DIM,
         "rerank_model": RERANK_MODEL,

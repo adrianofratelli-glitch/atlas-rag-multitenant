@@ -82,7 +82,9 @@ export async function streamChat({ question, messages, threadId, accessLevel, so
       }),
     })
     if (!res.ok || !res.body) {
-      fail(`Falha na requisição ao backend (HTTP ${res.status}).`)
+      fail(res.status === 429
+        ? 'Muitas consultas ao mesmo tempo. Aguarde alguns segundos e tente de novo.'
+        : `Falha na requisição ao backend (HTTP ${res.status}).`)
       return
     }
     reader = res.body.getReader()

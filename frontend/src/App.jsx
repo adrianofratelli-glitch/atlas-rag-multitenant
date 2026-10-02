@@ -27,7 +27,7 @@ const TABS = [
     label: 'Corpus de referência',
     panel: {
       readOnly: true,
-      title: 'Documentos do tenant',
+      title: 'Documentos',
       emptyLabel: 'Nenhum documento de referência indexado. Rode python ingest.py <arquivo>.',
     },
   },

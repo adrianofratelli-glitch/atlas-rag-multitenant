@@ -8,7 +8,6 @@ export default function EngineStrip({ stats, elapsedMs }) {
   const fused = stats.fused ?? '—'
   const rer = stats.reranked ?? '—'
   const dim = stats.embed_dim ?? '—'
-  const idx = stats.index ?? 'vector_index'
   const embm = stats.embed_model ?? 'voyage-3'
   const rerm = stats.rerank_model ?? 'rerank-2'
   const hybrid = stats.hybrid
@@ -30,7 +29,7 @@ export default function EngineStrip({ stats, elapsedMs }) {
           <>
             <span style={{ color: C.muted }}> + </span>
             <span className="hint" title="documentos retornados pelo Atlas Search léxico (BM25) — pega match exato (leis, siglas, códigos)">
-              {lex} léxicos
+              {lex} {lex === 1 ? 'léxico' : 'léxicos'}
             </span>
           </>
         )}
@@ -53,11 +52,9 @@ export default function EngineStrip({ stats, elapsedMs }) {
           {restrito ? '🔓 acesso total' : '🔒 só público'}
         </span>
         <span>|</span>
-        <span>{embm} · {dim}d</span>
+        <span>{embm}{dim && dim !== '—' && dim !== 0 ? ` · ${dim}d` : ''}</span>
         <span>|</span>
         <span>{rerm}</span>
-        <span>|</span>
-        <span>idx <code style={{ color: C.green }}>{idx}</code></span>
         {elapsedMs != null && (
           <>
             <span>|</span>
