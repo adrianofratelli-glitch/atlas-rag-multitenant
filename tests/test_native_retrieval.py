@@ -189,5 +189,34 @@ class TestAgentNative(unittest.TestCase):
         self.assertFalse(agent.insufficient_evidence([{"rerank_score": 0.01}], stats))
 
 
+class TestIngestAuto(unittest.TestCase):
+    def test_insert_chunks_auto_omits_embedding_and_keeps_metadata(self):
+        import ingest
+        from langchain_core.documents import Document
+        inserted = []
+
+        class Col:
+            def insert_many(self, docs):
+                inserted.extend(docs)
+
+        chunks = [Document(page_content="t1", metadata={"page": 3, "file": "a.pdf"}),
+                  Document(page_content="t2", metadata={})]
+        n = ingest.insert_chunks_auto(Col(), chunks, "doc", "publico", None, batch_size=1)
+        self.assertEqual(n, 2)
+        self.assertTrue(all("embedding" not in d for d in inserted))
+        self.assertEqual(inserted[0]["metadata"]["page"], 3)
+        self.assertEqual(inserted[1]["metadata"]["chunk_id"], 1)
+        self.assertEqual(inserted[0]["metadata"]["client_id"], CLIENT_ID)
+        self.assertNotIn("expires_at", inserted[0]["metadata"])
+
+    def test_mode_follows_flag_and_override(self):
+        import ingest
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"EMBED_MODE": "auto"}):
+            self.assertTrue(ingest.auto_embed_mode())
+        with mock.patch.dict(os.environ, {"EMBED_MODE": "manual"}):
+            self.assertFalse(ingest.auto_embed_mode())
+
+
 if __name__ == "__main__":
     unittest.main()

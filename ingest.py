@@ -8,11 +8,46 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import voyageai
-from config import DB_NAME, CLIENT_ID
+from config import DB_NAME, CLIENT_ID, NATIVE_ENABLED
 from db import get_client
 from dotenv import load_dotenv
 
 load_dotenv()
+
+def auto_embed_mode() -> bool:
+    """True quando o Atlas gera os vetores (índice autoEmbed): não há embedding client-side.
+
+    EMBED_MODE=auto|manual força; sem ele, segue RAG_NATIVE (o caminho nativo usa autoEmbed).
+    """
+    mode = os.getenv("EMBED_MODE", "").strip().lower()
+    return mode == "auto" if mode else NATIVE_ENABLED
+
+
+def insert_chunks_auto(collection, chunks, source_name, nivel_acesso, expires_at,
+                       on_progress=None, batch_size=200) -> int:
+    """Insere só texto + metadata; o índice autoEmbed gera os vetores no Atlas, sem rate limit local."""
+    inserted = 0
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i : i + batch_size]
+        docs = []
+        for j, chunk in enumerate(batch):
+            metadata = {
+                "source": source_name,
+                "client_id": CLIENT_ID,
+                "file": chunk.metadata.get("file", source_name),
+                "page": chunk.metadata.get("page", 0),
+                "chunk_id": i + j,
+                "nivel_acesso": nivel_acesso,
+            }
+            if expires_at:
+                metadata["expires_at"] = expires_at
+            docs.append({"text": chunk.page_content, "metadata": metadata})
+        collection.insert_many(docs)
+        inserted += len(docs)
+        if on_progress:
+            on_progress("embedding", inserted, len(chunks))
+    return inserted
+
 
 SUPPORTED_FORMATS = {
     ".pdf", ".docx", ".doc", ".txt", ".csv",
@@ -171,7 +206,8 @@ def ingest(
         expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
         log(f"Chunks will expire at {expires_at.isoformat()} (TTL: {ttl_hours}h)")
 
-    voyage = voyageai.Client(api_key=os.environ["VOYAGE_API_KEY"])
+    auto = auto_embed_mode()
+    voyage = None if auto else voyageai.Client(api_key=os.environ["VOYAGE_API_KEY"])
 
     log(f"Loading {path.name}...")
     progress("loading", 0, 0)
@@ -186,6 +222,21 @@ def ingest(
     )
     chunks = splitter.split_documents(docs)
     log(f"   {len(chunks)} chunks generated")
+
+    if auto:
+        for c in chunks:
+            c.metadata["file"] = path.name
+        log("Inserting chunks (Atlas generates the embeddings via autoEmbed)...")
+        progress("embedding", 0, len(chunks))
+        inserted = insert_chunks_auto(collection, chunks, source_name, nivel_acesso, expires_at, on_progress)
+        log(f"Inserted {inserted} documents into Atlas (DB: {DB_NAME}).")
+        progress("done", inserted, inserted)
+        return {
+            "source": source_name,
+            "chunks": inserted,
+            "file": path.name,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        }
 
     texts = [c.page_content for c in chunks]
     batch_size = 10  # conservative for the free tier (10K TPM)
