@@ -29,6 +29,21 @@ DOCUMENT_DESCRIPTION = os.getenv("DOCUMENT_DESCRIPTION", "Converse com seus docu
 DB_NAME = os.getenv("DB_NAME", f"rag_{CLIENT_ID}")
 SYSTEM_PROMPT_EXTRA = os.getenv("SYSTEM_PROMPT_EXTRA", "")
 
+# Recuperação nativa no Atlas (autoEmbed + $rankFusion + $rerank). Desligada por padrão.
+NATIVE_ENABLED = os.getenv("RAG_NATIVE", "0") == "1"
+NATIVE_EMBED_MODEL = os.getenv("NATIVE_EMBED_MODEL", "voyage-4")
+NATIVE_RERANK_MODEL = os.getenv("NATIVE_RERANK_MODEL", "rerank-3")
+NATIVE_RERANK_CANDIDATES = max(1, min(1000, int(os.getenv("NATIVE_RERANK_CANDIDATES", "30"))))
+
+
+def assert_writable_db(db_name: str) -> None:
+    """Scripts que gravam dado só rodam em banco *_test, salvo ALLOW_DEMO_DB_WRITE=1."""
+    if db_name.endswith("_test") or os.getenv("ALLOW_DEMO_DB_WRITE") == "1":
+        return
+    raise RuntimeError(
+        f"'{db_name}' não é um banco *_test. Defina ALLOW_DEMO_DB_WRITE=1 para gravar nele de propósito."
+    )
+
 _cfg_path = Path("client_config.json")
 _cfg: dict = {}
 if _cfg_path.exists():

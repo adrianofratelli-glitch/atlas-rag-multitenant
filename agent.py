@@ -7,7 +7,8 @@ import contextvars
 import voyageai
 import telemetry
 from resilience import retry_call
-from config import CLIENT_ID, DB_NAME
+from config import CLIENT_ID, DB_NAME, NATIVE_ENABLED, NATIVE_EMBED_MODEL, NATIVE_RERANK_MODEL
+import native_retrieval
 from db import get_client
 from dotenv import load_dotenv
 
@@ -165,7 +166,82 @@ def retrieve_context(query: str, top_k: int = 15,
         return result
 
 
+def _format_results(top_results):
+    """Monta o contexto do prompt e os cartões de fonte (um por chunk, não por página)."""
+    parts = []
+    sources = []
+    # Dedupe by chunk, not by page: a Markdown corpus has no pagination, so every
+    # chunk carries page 0 and a page-keyed set collapsed all eight reranked
+    # passages into a single source card.
+    seen_chunks: set = set()
+    for r in top_results:
+        page = r["metadata"].get("page", "?")
+        source = r["metadata"].get("source", "")
+        chunk_key = r.get("chunk_id") or (source, page, r["text"][:80])
+        parts.append(f"[Página {page} | {source}]\n{r['text']}")
+        if chunk_key not in seen_chunks:
+            sources.append({
+                "page": page,
+                "source": source,
+                "nivel_acesso": r["metadata"].get("nivel_acesso", "publico"),
+                "matched_by": sorted(r["matched_by"]),
+                "vector_score": r.get("vector_score", 0),
+                "rerank_score": r.get("rerank_score", 0),
+                "preview": r["text"][:130],
+            })
+            seen_chunks.add(chunk_key)
+    return parts, sources
+
+
+def _retrieve_native(query, top_k, levels, sources, use_lexical, use_rerank, final_n, _capture):
+    """Caminho nativo: um único aggregation no Atlas (autoEmbed + $rankFusion + $rerank)."""
+    collection = get_client()[DB_NAME]["documents"]
+    with telemetry.span("rag.native", client_id=CLIENT_ID, embed=NATIVE_EMBED_MODEL,
+                        rerank=NATIVE_RERANK_MODEL) as sp:
+        top_results, info = native_retrieval.run_native(
+            collection, query, top_k, levels, sources, final_n,
+            use_lexical=use_lexical, use_rerank=use_rerank)
+        telemetry.annotate(sp, hits=len(top_results), degraded=info["degraded"])
+    injection_dropped = 0
+    if INJECTION_FILTER:
+        top_results, injection_dropped = _drop_injected(top_results)
+    if _capture is not None:
+        _capture.extend(top_results)
+    if not top_results:
+        return "Nenhum contexto encontrado.", [], {
+            "mode": "no_context", "native": True, "native_degraded": info["degraded"],
+            "injection_dropped": injection_dropped}
+    parts, out_sources = _format_results(top_results)
+    stats = {
+        "native": True,
+        "native_degraded": info["degraded"],
+        "rerank_degraded": info["degraded"],  # score não comparável: insufficient_evidence não recusa por ele
+        "num_candidates": top_k * 15,
+        "vector_hits": sum(1 for r in top_results if "vetorial" in r["matched_by"]),
+        "lexical_hits": sum(1 for r in top_results if "léxico" in r["matched_by"]),
+        "fused": len(top_results),
+        "reranked": len(top_results),
+        "injection_dropped": injection_dropped,
+        "index": "vector_index (autoEmbed) + text_index",
+        "embed_model": NATIVE_EMBED_MODEL,
+        "rerank_model": NATIVE_RERANK_MODEL,
+        "embed_dim": 0,
+        "access_levels": levels,
+        "sources": list(sources or []),
+        "hybrid": use_lexical,
+        "embedding_degraded": False,
+        "query_details": [{
+            "operation": "aggregate / $rankFusion + $rerank",
+            "namespace": f"{DB_NAME}.documents",
+            "pipeline": info["pipeline"],
+        }],
+    }
+    return "\n\n---\n\n".join(parts), out_sources, stats
+
+
 def _retrieve(query, top_k, levels, sources, use_lexical, use_rerank, final_n, _capture):
+    if NATIVE_ENABLED:
+        return _retrieve_native(query, top_k, levels, sources, use_lexical, use_rerank, final_n, _capture)
     voyage = _get_voyage()
     collection = get_client()[DB_NAME]["documents"]
 
@@ -281,28 +357,7 @@ def _retrieve(query, top_k, levels, sources, use_lexical, use_rerank, final_n, _
         return "Nenhum contexto encontrado.", [], {"mode": "no_context", "injection_dropped": injection_dropped}
 
     requested_sources = list(sources or [])
-    parts = []
-    sources = []
-    # Dedupe by chunk, not by page: a Markdown corpus has no pagination, so every
-    # chunk carries page 0 and a page-keyed set collapsed all eight reranked
-    # passages into a single source card.
-    seen_chunks: set = set()
-    for r in top_results:
-        page = r["metadata"].get("page", "?")
-        source = r["metadata"].get("source", "")
-        chunk_key = r.get("chunk_id") or (source, page, r["text"][:80])
-        parts.append(f"[Página {page} | {source}]\n{r['text']}")
-        if chunk_key not in seen_chunks:
-            sources.append({
-                "page": page,
-                "source": source,
-                "nivel_acesso": r["metadata"].get("nivel_acesso", "publico"),
-                "matched_by": sorted(r["matched_by"]),
-                "vector_score": r.get("vector_score", 0),
-                "rerank_score": r.get("rerank_score", 0),
-                "preview": r["text"][:130],
-            })
-            seen_chunks.add(chunk_key)
+    parts, sources = _format_results(top_results)
 
     stats = {
         "num_candidates": top_k * 15,        # $vectorSearch numCandidates
