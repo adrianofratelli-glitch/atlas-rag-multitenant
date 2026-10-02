@@ -25,7 +25,7 @@ function SourceCard({ i, s }) {
           {restrito && chip('restrito', '#F5C518')}
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ color: C.sub }}>vetorial {vpct}%</span>
+          <span style={{ color: C.sub }}>vetorial {matched.includes('vetorial') ? `${vpct}%` : '—'}</span>
           <span style={{ color: C.muted }}>→</span>
           <span style={{ fontWeight: 700, color: fill, background: 'rgba(0,0,0,0.3)', padding: '1px 7px', borderRadius: 4 }}>
             rerank {pct}%

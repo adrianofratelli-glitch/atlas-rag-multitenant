@@ -108,5 +108,20 @@ class TestProtectedCorpus(unittest.TestCase):
         self.assertIn("metadata.expires_at", source)
 
 
+
+
+class IsoUtcTests(unittest.TestCase):
+    def test_naive_datetime_is_marked_utc(self):
+        from datetime import datetime
+        from backend.documents import iso_utc
+        self.assertTrue(iso_utc(datetime(2026, 10, 3, 13, 41, 14)).endswith("+00:00"))
+
+    def test_aware_datetime_is_converted_to_utc(self):
+        from datetime import datetime, timedelta, timezone
+        from backend.documents import iso_utc
+        local = datetime(2026, 10, 3, 10, 41, 14, tzinfo=timezone(timedelta(hours=-3)))
+        self.assertEqual(iso_utc(local), "2026-10-03T13:41:14+00:00")
+
+
 if __name__ == "__main__":
     unittest.main()

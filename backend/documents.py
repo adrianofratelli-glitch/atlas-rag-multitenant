@@ -54,6 +54,15 @@ class ProtectedDocumentError(RuntimeError):
     """The tenant's reference corpus cannot be removed through the app."""
 
 
+def iso_utc(dt) -> str:
+    """ISO-8601 em UTC com fuso explícito. O pymongo devolve datetime ingênuo (já em UTC); sem o fuso
+    o navegador lê como horário local e a UI mostrava "expira em 26h" para um TTL de 24h (UTC-3)."""
+    from datetime import timezone
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
 def safe_source_name(filename: str) -> str:
     """Filename -> a stable, filesystem- and Atlas-safe `metadata.source` value."""
     stem = Path(filename or "").stem
@@ -119,7 +128,7 @@ def list_documents() -> dict:
             "source": r["_id"],
             "chunks": r["chunks"],
             "file": r.get("file"),
-            "expires_at": r["expires_at"].isoformat() if r.get("expires_at") else None,
+            "expires_at": iso_utc(r["expires_at"]) if r.get("expires_at") else None,
             "nivel_acesso": sorted(lvl for lvl in (r.get("nivel_acesso") or []) if lvl),
             # Workspace tab that owns this document (see sources_for_scope).
             "workspace": "uploads" if r.get("expires_at") else "base",
