@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import time
+from uuid import uuid4
 from typing import Optional, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -120,6 +121,26 @@ def n_generate(state: ChatState, config) -> dict:
     return {"full_response": full, "timed_out": False, "ttft_ms": ttft_ms, "usage": usage}
 
 
+def checkpoint_db_name() -> str:
+    """Banco dos checkpoints: rag_<CLIENT_ID> (fora de DB_NAME, um por tenant)."""
+    return f"rag_{os.getenv('CLIENT_ID') or 'default'}"
+
+
+def checkpoint_ttl_seconds() -> int | None:
+    """TTL dos checkpoints. CHECKPOINT_TTL_DAYS > conversa; 0 desliga."""
+    days = float(os.getenv("CHECKPOINT_TTL_DAYS", os.getenv("CONVERSATION_RETENTION_DAYS", "30")))
+    return int(days * 86400) if days > 0 else None
+
+
+def resolve_thread_id(thread_id: str | None) -> str:
+    """Turno sem thread_id ganha uma thread própria e descartável.
+
+    Com `None`, o LangGraph gravava todo turno anônimo na MESMA thread (`thread_id: null`):
+    estado de pessoas diferentes empilhado num único histórico de checkpoints.
+    """
+    return thread_id or f"anon-{uuid4().hex}"
+
+
 _GRAPH = None
 _CHECKPOINT_CLIENT: SyncMongoClient | None = None
 
@@ -139,9 +160,12 @@ def _build_graph():
     if mongo_uri:
         _CHECKPOINT_CLIENT = SyncMongoClient(mongo_uri)
         checkpointer = MongoDBSaver(
-            _CHECKPOINT_CLIENT, db_name=os.getenv("CLIENT_ID", "rag") and f"rag_{os.getenv('CLIENT_ID', 'default')}",
+            _CHECKPOINT_CLIENT, db_name=checkpoint_db_name(),
             checkpoint_collection_name="langgraph_checkpoints",
             writes_collection_name="langgraph_checkpoint_writes",
+            # Sem TTL os checkpoints (~25 KB cada: contexto recuperado + instruções) cresciam
+            # para sempre. Mesmo prazo das conversas (CONVERSATION_RETENTION_DAYS).
+            ttl=checkpoint_ttl_seconds(),
         )
     else:
         checkpointer = MemorySaver()
@@ -167,6 +191,6 @@ def run_turn(*, question, access_levels, sources, history, static_instructions, 
         "access_levels": access_levels, "llm": llm, "client_id": client_id, "model_name": model_name,
         "max_attempts": max_attempts, "stream_deadline_s": stream_deadline_s,
         "refusal_message": refusal_message, "followups": followups, "metrics": metrics,
-        "track_usage": track_usage, "emit": emit, "thread_id": thread_id,
+        "track_usage": track_usage, "emit": emit, "thread_id": resolve_thread_id(thread_id),
     }}
     return graph.invoke(initial, config=config)
