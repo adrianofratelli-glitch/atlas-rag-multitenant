@@ -118,7 +118,7 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
       >
         <Icon glyph={open ? 'ChevronDown' : 'ChevronRight'} />
         <span>{title}</span>
-        <span className="docs-scope">{docs.length} indexado(s) · consultando {scope}</span>
+        <span className="docs-scope">{docs.length ? `${docs.length} indexado(s) · consultando ${scope}` : 'nenhum documento ainda · abra para enviar'}</span>
       </button>
 
       {open && (
