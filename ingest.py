@@ -8,7 +8,7 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import voyageai
-from config import DB_NAME, CLIENT_ID, NATIVE_ENABLED
+from config import DB_NAME, CLIENT_ID, NATIVE_ENABLED, assert_writable_db
 from db import get_client
 from dotenv import load_dotenv
 
@@ -155,6 +155,14 @@ class AlreadyIndexedError(RuntimeError):
         )
 
 
+class ProtectedSourceError(RuntimeError):
+    """A disposable (TTL) ingestion tried to replace a permanent document of the same name."""
+
+    def __init__(self, source_name: str):
+        self.source_name = source_name
+        super().__init__(f"'{source_name}' is a permanent document; a TTL ingestion cannot replace it.")
+
+
 def ingest(
     file_path: str,
     reset: bool = False,
@@ -198,8 +206,17 @@ def ingest(
         raise AlreadyIndexedError(source_name, existing)
 
     if reset and existing > 0:
+        reset_filter = {"metadata.source": source_name}
+        if ttl_hours and ttl_hours > 0:
+            # Disposable (TTL) ingestion only ever replaces disposable chunks: a reset here
+            # must not take a permanent (reference-corpus) document with the same name.
+            permanent = collection.count_documents(
+                {"metadata.source": source_name, "metadata.expires_at": {"$exists": False}}, limit=1)
+            if permanent:
+                raise ProtectedSourceError(source_name)
+            reset_filter["metadata.expires_at"] = {"$exists": True}
         log(f"Removing {existing} chunks from '{source_name}'...")
-        collection.delete_many({"metadata.source": source_name})
+        collection.delete_many(reset_filter)
 
     expires_at = None
     if ttl_hours and ttl_hours > 0:
@@ -327,6 +344,9 @@ if __name__ == "__main__":
         help="Access level (public/restricted) assigned to this document's chunks",
     )
     args = parser.parse_args()
+    # The CLI writes the tenant's permanent corpus: same database guard as the setup scripts
+    # (*_test, or ALLOW_DEMO_DB_WRITE=1 on purpose). The upload endpoint is the app's own path.
+    assert_writable_db(DB_NAME)
     try:
         ingest(args.file, reset=args.reset, nivel_acesso=args.nivel, ttl_hours=args.ttl_horas)
     except FileNotFoundError as e:
