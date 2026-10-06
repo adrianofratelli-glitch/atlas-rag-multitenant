@@ -79,7 +79,8 @@ body::after {
 .access-switch button { min-height: 32px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--sub); font: 600 10px var(--mono); cursor: pointer; text-transform: capitalize; }
 .access-switch button[aria-pressed='true'] { background: rgba(0,237,100,.1); color: var(--green); }
 @media (max-width: 720px) {
-  .top-nav { align-items: flex-start; flex-wrap: wrap; }
+  /* Em tela estreita o topo ocupa 3 linhas: fixo, cobria ~20% da altura e as abas ao rolar. */
+  .top-nav { position: static; align-items: flex-start; flex-wrap: wrap; }
   .top-nav > span:nth-child(2) { display: none; }
   .top-nav > span:last-child { width: 100%; margin-left: 0 !important; flex-wrap: wrap; }
 }
@@ -251,11 +252,6 @@ body::after {
 .src-head { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 10px; margin-bottom: 8px; }
 .src-track { height: 5px; background: rgba(255, 255, 255, 0.06); border-radius: 3px; overflow: hidden; }
 .src-fill { height: 100%; border-radius: 3px; }
-
-/* ===== Footer ===== */
-.mdb-footer { display: flex; align-items: center; justify-content: center; gap: 9px; margin: 36px 0 6px; padding-top: 20px; border-top: 1px solid var(--border-subtle); }
-.mdb-footer-txt { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: var(--sub); text-transform: uppercase; }
-.mdb-footer-txt strong { color: var(--green); }
 
 /* ===== Suggestions (pillar-style cards) ===== */
 .sugg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }

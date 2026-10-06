@@ -1,5 +1,4 @@
 """Shared Anthropic client for the PDF-vs-Markdown benchmark scripts."""
-import os
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -9,10 +8,18 @@ MODEL = "claude-sonnet-4-6"
 
 
 def get_client() -> Anthropic:
+    """Same explicit gateway as the app (llm_gateway): never an implicit provider endpoint."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from llm_gateway import gateway_settings
+
+    gw = gateway_settings()
     return Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.getenv("ANTHROPIC_BASE_URL"),
-        default_headers={"Authorization": "Bearer " + os.environ["ANTHROPIC_API_KEY"]},
+        api_key=gw["api_key"],
+        base_url=gw["base_url"],
+        default_headers=gw["headers"],
         timeout=180.0,
         max_retries=3,
     )

@@ -27,12 +27,15 @@ _voyage = None
 
 
 VOYAGE_TIMEOUT_S = float(os.getenv("VOYAGE_TIMEOUT_S", "15"))
-# Tentativas totais por chamada à Voyage (embed/rerank). 1 = sem retry (comportamento anterior).
-VOYAGE_MAX_ATTEMPTS = max(1, int(os.getenv("VOYAGE_MAX_ATTEMPTS", "1")))
+# Tentativas totais por chamada à Voyage (embed/rerank), só para 429/5xx/timeout/conexão.
+# Ligado por padrão (3); VOYAGE_MAX_ATTEMPTS=1 desliga.
+VOYAGE_MAX_ATTEMPTS = max(1, int(os.getenv("VOYAGE_MAX_ATTEMPTS", "3")))
 VOYAGE_RETRY_BASE_S = float(os.getenv("VOYAGE_RETRY_BASE_S", "0.5"))
-# Filtro heurístico de prompt injection nos trechos recuperados (opt-in). Não é controle
-# absoluto: o controle real é o filtro metadata.client_id, inescapável nas pipelines.
-INJECTION_FILTER = os.getenv("RAG_INJECTION_FILTER", "0") == "1"
+# Filtro heurístico de prompt injection nos trechos recuperados. Ligado por padrão (offline,
+# sem custo de rede); RAG_INJECTION_FILTER=0 desliga. Sem o pacote `guardrails` (pov-shared)
+# vira no-op (fail-open) e o turno segue. Não é controle absoluto: o controle de isolamento
+# é o filtro metadata.client_id, inescapável nas pipelines.
+INJECTION_FILTER = os.getenv("RAG_INJECTION_FILTER", "1") != "0"
 # Recusa explícita sem evidência suficiente (opt-in). Score do reranker abaixo do piso = recusa.
 # O piso é escolhido no split `calib` do golden e confirmado no split `test`, que é o avaliado:
 #   rerank-2 (caminho clássico): 0.6  -> 0/19 falsas recusas e 3/4 recusas devidas no `test`
@@ -41,6 +44,10 @@ INJECTION_FILTER = os.getenv("RAG_INJECTION_FILTER", "0") == "1"
 # recalibre com perguntas reais antes de confiar nele em produção.
 REFUSE_WEAK_EVIDENCE = os.getenv("RAG_REFUSE_WEAK_EVIDENCE", "0") == "1"
 MIN_RERANK_SCORE = float(os.getenv("RAG_MIN_RERANK_SCORE", "0.65" if NATIVE_ENABLED else "0.6"))
+
+
+class RetrievalUnavailable(RuntimeError):
+    """O Atlas não respondeu a nenhum caminho de recuperação (nativo e lexical)."""
 
 
 def _get_voyage() -> voyageai.Client:
@@ -120,7 +127,10 @@ def _lexical_pipeline(query, top_k, access_levels, sources=None):
 
 def _drop_injected(chunks: list[dict]) -> tuple[list[dict], int]:
     """Remove trechos com padrão de prompt injection antes de irem ao prompt do Claude."""
-    from guardrails import check_injection
+    try:
+        from guardrails import check_injection
+    except ImportError:  # pov-shared ausente (repo público sem o pacote): fail-open
+        return chunks, 0
     kept = [c for c in chunks if check_injection(c["text"], use_llm=False).ok]
     return kept, len(chunks) - len(kept)
 
@@ -205,6 +215,8 @@ def _retrieve_native(query, top_k, levels, sources, use_lexical, use_rerank, fin
             collection, query, top_k, levels, sources, final_n,
             use_lexical=use_lexical, use_rerank=use_rerank)
         telemetry.annotate(sp, hits=len(top_results), degraded=info["degraded"])
+    if info.get("failed"):
+        raise RetrievalUnavailable("native and lexical retrieval both failed")
     injection_dropped = 0
     if INJECTION_FILTER:
         top_results, injection_dropped = _drop_injected(top_results)

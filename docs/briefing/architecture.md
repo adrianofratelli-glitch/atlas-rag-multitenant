@@ -14,7 +14,7 @@ Critério que define "arquitetura certa" aqui: adicionar um tenant novo = novos 
 |---|---|---|
 | Banco / busca | MongoDB Atlas (Vector Search + Atlas Search/BM25) | `db.py`, `setup_db.py` |
 | Embeddings + rerank | Nativo no Atlas (`RAG_NATIVE=1`): Automated Embedding `voyage-4`, `$rankFusion`, `$rerank` `rerank-3`. Caminho clássico: VoyageAI `voyage-3` + `rerank-2` via SDK | `native_retrieval.py`, `agent.py`, `ingest.py` |
-| Geração | Claude (`claude-sonnet-4-6`) via `langchain_anthropic.ChatAnthropic`, atrás de um gateway configurável (ver `ANTHROPIC_BASE_URL` no `.env`) | `backend/api.py` |
+| Geração | Claude (`claude-sonnet-4-6`) via `langchain_anthropic.ChatAnthropic`, sempre atrás de um gateway explícito: `GROVE_BASE_URL` validado pelo `grove_client` do pacote `pov-shared`, ou `ANTHROPIC_BASE_URL` declarado; sem destino padrão implícito | `llm_gateway.py`, `backend/api.py` |
 | API | FastAPI, streaming SSE | `backend/api.py` |
 | Frontend | React + Vite + LeafyGreen (design system MongoDB) | `frontend/src/` |
 | Deploy | container único: nginx serve o build do frontend e faz proxy de `/api` pro uvicorn | `Dockerfile`, `docker/start.sh`, `nginx.conf` |
@@ -76,18 +76,22 @@ As duas buscas rodam de fato em paralelo (`ThreadPoolExecutor`, uma thread para 
 
 | Arquivo | Papel |
 |---|---|
-| `agent.py` | pipeline de recuperação híbrida (embedding → vector search + lexical search → RRF → rerank). Usado tanto pela API quanto — potencialmente — por um grafo LangGraph que **não existe no código atual** (ver nota abaixo). |
+| `agent.py` | entrada da recuperação: caminho nativo (`native_retrieval.py`, uma aggregation) ou clássico (embedding → vector search + lexical search → RRF → rerank), filtro de prompt injection nos trechos recuperados. Chamado pelo nó `retrieve` de `rag_graph.py`. |
+| `rag_graph.py` | o turno de chat como `StateGraph` do LangGraph: `retrieve` → (`refuse` \| `generate`), checkpoint em `MongoDBSaver` (banco `rag_<CLIENT_ID>`, TTL de 30 dias) ou `MemorySaver` sem `MONGO_URI`. |
 | `backend/api.py` | app FastAPI: streaming SSE do chat, montagem manual das mensagens (não usa `ChatPromptTemplate` porque contexto/histórico podem conter `{}` literais que um template interpretaria como variável), outline cacheado, endpoints de config/status/histórico/documentos. |
 | `backend/documents.py` | biblioteca de documentos: valida upload, enfileira ingestão em worker único, expõe jobs, separa os dois "workspaces" (corpus base vs. uploads de demo) via TTL, protege o corpus base contra remoção. |
 | `ingest.py` | loader multi-formato (PDF/DOCX/TXT/CSV/MD/HTML/JSON/XLSX/PPTX), chunking (`RecursiveCharacterTextSplitter`, 800/150), embedding em lotes com pausa de 22s (tier gratuito VoyageAI: 3 req/min). |
 | `db.py` | `MongoClient` singleton (pool de conexão reusado em todo o processo) + verificação de identidade do tenant no boot. |
 | `config.py` | toda a configuração de tenant vem de variáveis de ambiente (`CLIENT_ID`, `CLIENT_NAME`, etc.), sem default silencioso para `CLIENT_ID`. |
-| `setup_db.py` | script administrativo idempotente: cria coleções, índices TTL e os dois índices de busca do Atlas (`vector_index`, `text_index`). |
+| `setup_db_native.py` / `setup_db.py` | scripts administrativos idempotentes (nativo / clássico): coleções, índices TTL e os dois índices de busca (`vector_index`, `text_index`). Recusam banco que não termina em `_test` sem `ALLOW_DEMO_DB_WRITE=1`. |
+| `scripts/reset_demo.py` | reset da demo num comando: índices, reingestão do corpus base (o Atlas regenera os embeddings via `autoEmbed`), remoção de uploads e fontes fora do corpus, limpeza de conversas e checkpoints, espera até uma consulta real devolver trechos. Mesma guarda de banco. |
 | `observability.py` | logging estruturado, request-id, `/api/metrics`, `/metrics` (Prometheus), `/api/health`. |
 
-## Nota sobre um agente LangGraph — não existe hoje
+## O turno como grafo (LangGraph), sem agente
 
-O briefing antigo (`01-arquitetura.md`) menciona um `agent.py::build_graph()` com nós `retrieve → generate` e checkpoint via `MongoDBSaver` do LangGraph, "fora do caminho da API". **Esse código não existe no `agent.py` atual** — foi verificado por grep (`build_graph`, `MongoDBSaver`, `StateGraph`, `langgraph`) em todo o repositório e em `requirements*.txt`: zero ocorrências. O que existe de fato é uma função `retrieve_context()` chamada diretamente por `backend/api.py`, que monta as mensagens do Claude na mão. Por isso este briefing **não tem** um `agent-behavior.md`: não há orquestração de agente/grafo para documentar. Se esse código for reintroduzido, este arquivo precisa ser atualizado.
+`rag_graph.py` organiza o turno em três nós: `retrieve` (chama `agent.retrieve_context`, decide se há evidência), `refuse` (recusa sem chamar o LLM, só com `RAG_REFUSE_WEAK_EVIDENCE=1` ou sem trecho nenhum) e `generate` (stream do Claude). Não há ferramentas nem laço de raciocínio: é um pipeline fixo, por isso não existe `agent-behavior.md`. O endpoint `/api/chat` é síncrono e roda o grafo numa thread, drenando uma fila para o SSE.
+
+Checkpoints: `MongoDBSaver` grava em `rag_<CLIENT_ID>` (`langgraph_checkpoints`, `langgraph_checkpoint_writes`) com TTL (`CHECKPOINT_TTL_DAYS`, padrão igual a `CONVERSATION_RETENTION_DAYS`, 30). Um turno sem `thread_id` recebe uma thread própria (`anon-<uuid>`); antes todos iam para a mesma thread nula, empilhando estado de pessoas diferentes.
 
 ## Multi-tenancy
 
@@ -121,7 +125,8 @@ Essa camada 2 é o tipo de detalhe que vale mostrar em auditoria de segurança: 
 - **Concorrência de geração limitada por semáforo** (`RAG_MAX_CONCURRENCY`, padrão 4) — satura, recusa (HTTP 429) em vez de enfileirar.
 - **Teto de tokens de saída** (`ANTHROPIC_MAX_TOKENS`, padrão 1500).
 - **Prompt caching do Claude**: o bloco de instruções estáticas (~120 tokens) sozinho não passa do mínimo de ~1024 tokens que a Anthropic exige para efetivar cache — por isso o sumário/outline do documento (estável entre turnos, cacheado 1h em memória) é anexado ao mesmo bloco, empurrando-o acima do mínimo e tornando o `cache_control: ephemeral` real, não um no-op silencioso.
-- **TTL em conversas** (`CONVERSATION_RETENTION_DAYS`, padrão 30 dias) e **TTL em uploads de demo** (24h) — dado de demo que fica para sempre vira custo para sempre.
+- **TTL em conversas** (`CONVERSATION_RETENTION_DAYS`, padrão 30 dias), **nos checkpoints do LangGraph** (mesmo prazo) e **em uploads de demo** (24h) — dado de demo que fica para sempre vira custo para sempre.
+- **Resiliência ligada por padrão** (a variável só ajusta ou desliga): retry do Claude antes do primeiro token (`LLM_STREAM_MAX_ATTEMPTS=3`, só 429/5xx/timeout/conexão), teto de geração (`STREAM_DEADLINE_S=120`), retry da Voyage no caminho clássico (`VOYAGE_MAX_ATTEMPTS=3`) e filtro heurístico de injection nos trechos (`RAG_INJECTION_FILTER=1`, fail-open sem o pacote `guardrails`). Atlas sem responder em nenhum caminho de busca vira erro legível, não recusa por falta de evidência.
 
 ## Exposição da API — limitações documentadas, não escondidas
 
@@ -129,16 +134,16 @@ Essa camada 2 é o tipo de detalhe que vale mostrar em auditoria de segurança: 
 - `/api/chat` valida pergunta não-vazia e < 4000 caracteres antes de gastar uma chamada de LLM.
 - `/api/health` responde 503 (não 200 com campo "degradado") quando o Atlas não responde.
 - **Sem autenticação em nenhum endpoint.** `access_level` é confiado do corpo da requisição. `/api/history/{thread_id}` devolve qualquer conversa a quem souber/adivinhar o `thread_id` (UUIDv4 gerado no cliente). Upload e remoção de documentos são abertos (validam formato/tamanho, não autenticam quem envia).
-- A remoção de documentos atinge só uploads de demo — o corpus base devolve 403 e não tem botão na UI.
+- A remoção de documentos atinge só uploads de demo — o corpus base devolve 403 e não tem botão na UI. Um upload com o mesmo nome de um documento base é recusado (422): com "reindexar" marcado, ele chegava a `ingest(reset=True)` e o `delete_many` por `metadata.source` apagava o corpus (reproduzido em banco `_test` em 2026-10-06: 303 → 0 chunks permanentes).
 
 **Isto é uma limitação de PoC, não uma feature.** Qualquer deployment que não seja demo em ambiente controlado precisa de autenticação real (SSO/JWT) antes de subir — e, dado que o corpus pode conter dado processual, isso vale para qualquer ambiente que não seja isolado/descartável.
 
 ## Como rodar (referência rápida)
 
 ```bash
-./run.sh                 # backend :8180 + frontend :5180
-python setup_db.py       # coleções + índices (idempotente)
-python ingest.py <arquivo>   # ingestão via CLI
+./run.sh                 # backend 127.0.0.1:8180 + frontend 127.0.0.1:5180
+ALLOW_DEMO_DB_WRITE=1 python scripts/reset_demo.py <arquivos do corpus>   # índices + corpus + embeddings
+python ingest.py <arquivo>   # ingestão avulsa via CLI (mesma guarda de banco)
 python -m unittest discover -s tests -v   # testes de lógica pura, sem Atlas/Voyage/Anthropic ao vivo
 ```
 

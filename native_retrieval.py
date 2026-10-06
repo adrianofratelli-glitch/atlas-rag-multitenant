@@ -136,4 +136,6 @@ def run_native(collection, query, top_k, levels, sources, final_n,
         return _usable(rows, lexical_only=True), {"degraded": True, "pipeline": fallback}
     except Exception:
         logger.exception("lexical fallback failed too")
-        return [], {"degraded": True, "pipeline": pipeline}
+        # `failed` separa "Atlas indisponível" de "nenhum trecho relevante": sem isso o turno
+        # virava uma recusa por falta de evidência, que culpa a pergunta por uma queda do banco.
+        return [], {"degraded": True, "failed": True, "pipeline": pipeline}

@@ -46,7 +46,7 @@ Uma tela só (sem sidebar, sem roteamento), dividida em **duas abas que nunca se
 | `DocumentsPanel` | `frontend/src/components/DocumentsPanel.jsx` | biblioteca de documentos daquela aba (`workspace = base | uploads`): drag-and-drop de upload com barra de progresso por chunk, lista de documentos com checkbox para restringir a recuperação, tag `restrito`/`base`/tempo até expirar |
 | `OfflineHero` | `frontend/src/components/OfflineHero.jsx` | tela de fallback quando `/api/config` ou o Atlas não respondem, com botão "Reconectar" |
 
-Componentes legados (fora do shell atual, mantidos no repo mas não usados no fluxo principal): `Sidebar.jsx`, `KpiRow.jsx`.
+Não há componentes legados: todo arquivo em `frontend/src/components/` é usado pelo shell atual.
 
 ## Por que o `EngineStrip` existe
 
@@ -91,7 +91,7 @@ O seletor `publico`/`restrito` do `TopBar` é **confiado do cliente** (não é a
 6. **Ingerir um documento novo** (outro formato — XLSX ou PPTX) pela CLI ou arrastando na aba `Novo conteúdo`, marcar só ele e repetir uma pergunta do documento original — o assistente diz que aquilo não está no contexto. Prova de que o filtro por `metadata.source` roda dentro das duas buscas, e é o momento em que o cliente entende que pode trazer o próprio documento (inclusive uma peça ou norma do próprio órgão) para a reunião.
 7. **Trocar `CLIENT_ID` no `.env`** — outro database, outro documento, outra persona, **mesmo código rodando**. É o fecho que transforma "fizeram uma demo para um cliente" em "isto é uma plataforma".
 
-Antes de apresentar: `setup_db_native.py` já rodado com os dois índices `READY` (o `autoEmbed` leva cerca de um minuto e meio para embedar o que foi inserido), `RAG_NATIVE=1` e `DB_NAME` apontando para a base nativa; uma pergunta de aquecimento fora da demo para pagar o cold start de embedding/geração; seletor de acesso começando em `publico` (para o passo 4 ter contraste).
+Antes de apresentar: `ALLOW_DEMO_DB_WRITE=1 python scripts/reset_demo.py <corpus>` rodado (cria o que faltar de índice, reingere o corpus, limpa uploads, conversas e checkpoints e só termina quando uma consulta real devolve trechos; cerca de 25 s com 701 chunks), `RAG_NATIVE=1` e `DB_NAME` apontando para a base nativa; uma pergunta de aquecimento fora da demo para pagar o cold start de embedding/geração; seletor de acesso começando em `publico` (para o passo 4 ter contraste).
 
 
 ## Roteiro curto para mostrar o MongoDB 9

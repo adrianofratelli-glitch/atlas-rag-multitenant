@@ -250,6 +250,14 @@ def start_ingestion(
     validate_extension(filename)
     validate_size(len(content))
     source = safe_source_name(filename)
+    # An upload named like a reference-corpus document (e.g. the same file sent again
+    # with "reindex" ticked) would reach ingest(reset=True), whose delete_many by
+    # metadata.source wiped the tenant's base corpus. Refuse it before any work.
+    if is_protected(source):
+        raise UploadError(
+            f"'{source}' é um documento base do tenant e não pode ser substituído pelo upload. "
+            "Renomeie o arquivo para enviá-lo como conteúdo novo."
+        )
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     path = UPLOAD_DIR / f"{source}{Path(filename).suffix.lower()}"

@@ -1,6 +1,7 @@
 """Retry/backoff para erros transitórios (429, 5xx, timeout, conexão).
 
-Tudo aqui é opt-in: com attempts <= 1 (default dos flags) o comportamento é o de antes.
+Ligado por padrão nos chamadores (VOYAGE_MAX_ATTEMPTS=3, LLM_STREAM_MAX_ATTEMPTS=3);
+attempts <= 1 desliga o retry.
 """
 import logging
 import random
@@ -69,6 +70,12 @@ def stream_with_retry(make_stream: Callable[[], Iterable], *, attempts: int, bas
 def friendly_error(exc: BaseException) -> str:
     """Mensagem para o evento SSE `error`, sem vazar detalhe interno além do tipo."""
     name = type(exc).__name__.lower()
+    if name == "retrievalunavailable":
+        return ("Não foi possível consultar o MongoDB Atlas agora (a busca não respondeu). "
+                "Verifique se o cluster está ativo e tente novamente em instantes.")
+    if name == "gatewaynotconfigured":
+        return ("O gateway de IA não está configurado neste servidor (GROVE_BASE_URL ou "
+                "ANTHROPIC_BASE_URL). Ajuste o .env e reinicie o backend.")
     if "timeout" in name or isinstance(exc, TimeoutError):
         return "A geração da resposta demorou mais que o esperado e foi interrompida. Tente novamente."
     if "ratelimit" in name or getattr(exc, "status_code", None) == 429:

@@ -20,7 +20,7 @@ WORKDIR /app
 COPY requirements.txt requirements-ingest.txt ./
 RUN pip install --no-cache-dir -r requirements-ingest.txt
 
-COPY agent.py config.py db.py observability.py ingest.py setup_db.py ./
+COPY *.py ./
 COPY backend/ ./backend/
 COPY --from=frontend-build /build/dist ./frontend/dist
 COPY nginx.conf /etc/nginx/nginx.conf

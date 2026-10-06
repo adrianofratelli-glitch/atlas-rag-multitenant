@@ -21,19 +21,20 @@ from functools import lru_cache
 from threading import BoundedSemaphore
 from uuid import uuid4
 from uuid import UUID
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 from dotenv import load_dotenv
 
 from langchain_anthropic import ChatAnthropic
 
 import observability
 import telemetry
+from llm_gateway import gateway_settings
 import rag_graph
 from resilience import friendly_error
 from config import (
@@ -61,26 +62,32 @@ logger = logging.getLogger("rag_poc")
 
 @lru_cache(maxsize=1)
 def _get_llm() -> ChatAnthropic:
-    """Reuse the SDK HTTP pool instead of rebuilding it for every SSE request."""
+    """Reuse the SDK HTTP pool instead of rebuilding it for every SSE request.
+
+    Destination and key come from `llm_gateway.gateway_settings()`: the Grove gateway
+    (validated by `pov-shared`) or an explicit ANTHROPIC_BASE_URL — never an implicit default.
+    """
+    gw = gateway_settings()
     return ChatAnthropic(
         model=MODEL,
         temperature=0,
         streaming=True,
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        anthropic_api_url=os.getenv("ANTHROPIC_BASE_URL"),
-        default_headers={"Authorization": "Bearer " + os.environ["ANTHROPIC_API_KEY"]},
+        api_key=gw["api_key"],
+        anthropic_api_url=gw["base_url"],
+        default_headers=gw["headers"],
         timeout=float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "45")),
         max_retries=int(os.getenv("ANTHROPIC_MAX_RETRIES", "2")),
         max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS", "1500")),
     )
 
-# Opt-in flags (defaults preserve the previous behaviour):
+# Resilience is on by default; the variables only tune or switch it off:
+#   LLM_STREAM_MAX_ATTEMPTS=N  -> retry Claude only before the first token (default 3; 1 = off)
+#   STREAM_DEADLINE_S=N        -> total SSE generation budget in seconds (default 120; 0 = off)
+# Opt-in (network/cost or behaviour change):
 #   TRACE_SINK=console|phoenix|atlas  -> spans per RAG stage (TRACE_MASK_PII is forced to 1)
-#   LLM_STREAM_MAX_ATTEMPTS=N         -> retry Claude only before the first token (1 = off)
-#   STREAM_DEADLINE_S=N               -> total SSE generation budget, 0 = off
 #   RAG_REFUSE_WEAK_EVIDENCE=1        -> explicit refusal when retrieval evidence is too weak (agent.py)
-LLM_STREAM_MAX_ATTEMPTS = max(1, int(os.getenv("LLM_STREAM_MAX_ATTEMPTS", "1")))
-STREAM_DEADLINE_S = float(os.getenv("STREAM_DEADLINE_S", "0"))
+LLM_STREAM_MAX_ATTEMPTS = max(1, int(os.getenv("LLM_STREAM_MAX_ATTEMPTS", "3")))
+STREAM_DEADLINE_S = max(0.0, float(os.getenv("STREAM_DEADLINE_S", "120")))
 REFUSAL_MESSAGE = (
     "Não encontrei no documento evidência suficiente para responder a essa pergunta com segurança. "
     "Reformule citando o tema, a seção ou o número da ação que você procura."
@@ -117,11 +124,32 @@ app.add_middleware(
 )
 
 
+_MULTIPART_OVERHEAD = 64 * 1024
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _safe_request_id(value: str | None) -> str:
+    """Client-supplied X-Request-Id is echoed and logged: accept only a short token."""
+    if value and _REQUEST_ID_RE.match(value):
+        return value
+    return uuid4().hex[:16]
+
+
 @app.middleware("http")
 async def _request_observability(request: Request, call_next):
     """request_id on every response + per-route latency/error counters at /api/metrics."""
-    request_id = request.headers.get("x-request-id") or uuid4().hex[:16]
+    request_id = _safe_request_id(request.headers.get("x-request-id"))
     start = time.perf_counter()
+    if request.method == "POST" and request.url.path == "/api/documents":
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > documents.MAX_UPLOAD_BYTES + _MULTIPART_OVERHEAD:
+            observability.metrics.observe(request.url.path, 413, 0.0)
+            return JSONResponse(
+                {"detail": f"arquivo acima do limite de {documents.MAX_UPLOAD_BYTES // (1024 * 1024)} MB"},
+                status_code=413, headers={"X-Request-Id": request_id})
     try:
         response = await call_next(request)
     except Exception:
@@ -435,7 +463,8 @@ class ChatBody(BaseModel):
     access_level: Literal["publico", "restrito"] = "publico"
     # Empty/absent means "every indexed document"; otherwise retrieval is scoped
     # to these metadata.source values (the documents picked in the UI).
-    sources: list[str] = Field(default_factory=list, max_length=50)
+    sources: list[Annotated[str, StringConstraints(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=50)
     # Workspace tab the question came from. "base" = the tenant's reference
     # corpus, "uploads" = content sent through the UI, "all" = no scoping.
     # Resolved server-side so an empty `sources` can never leak the other tab.
@@ -486,7 +515,9 @@ async def api_upload_document(
     Returns immediately with a job; the UI polls /api/documents/jobs/{job_id}.
     Embedding is rate-limited upstream, so a large file takes minutes.
     """
-    content = await file.read()
+    # Read at most limit+1 bytes: an oversized upload is rejected without loading it whole
+    # into memory (the Content-Length guard in the middleware stops most of them earlier).
+    content = await file.read(documents.MAX_UPLOAD_BYTES + 1)
     try:
         job = documents.start_ingestion(
             file.filename or "", content, nivel_acesso=nivel_acesso, reset=reset

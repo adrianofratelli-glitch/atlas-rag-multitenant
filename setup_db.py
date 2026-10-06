@@ -1,13 +1,14 @@
 import os
 from datetime import timedelta
 from pymongo import MongoClient
-from config import DB_NAME
+from config import DB_NAME, assert_writable_db
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
 def setup() -> None:
+    assert_writable_db(DB_NAME)
     client = MongoClient(os.environ["MONGO_URI"])
     db = client[DB_NAME]
 
