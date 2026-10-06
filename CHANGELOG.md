@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 1.3.0 (2026-10-06)
+
+Hardening after an adversarial review.
+
+- Fix: an upload named like a reference-corpus document, sent with "reindex", deleted the whole reference document (`ingest(reset=True)` deletes by `metadata.source`). The upload is now refused (422) and a TTL ingestion never deletes permanent chunks.
+- `scripts/reset_demo.py`: indexes, corpus, embeddings (`autoEmbed`), cleanup of uploads, conversations and checkpoints, and a readiness probe, in one idempotent command. `ingest.py` and `setup_db.py` now refuse a database that does not end in `_test` unless `ALLOW_DEMO_DB_WRITE=1`.
+- Resilience on by default: Claude retry before the first token (3 attempts), 120 s generation ceiling, Voyage retry on the classic path (3 attempts), prompt-injection filter on retrieved passages. Each variable only tunes or disables.
+- Atlas not answering any retrieval path is a readable error instead of a "no evidence" refusal.
+- LLM destination is always explicit (`llm_gateway.py`): Grove settings from `pov-shared`, or a declared `ANTHROPIC_BASE_URL`.
+- LangGraph checkpoints expire (30 days) and turns without `thread_id` no longer share one null thread.
+- Input hardening: 413 on oversized uploads from `Content-Length`, bounded upload read, source names capped at 200 characters, sanitised `X-Request-Id`.
+- Docker image copies every root module (it was missing five and failed on import).
+- `tests/test_hardening_adversarial.py` (32 tests). axios 1.20 (npm audit clean).
+
 ## 1.2.0 (2026-10-02)
 
 Shows why one database is enough.
