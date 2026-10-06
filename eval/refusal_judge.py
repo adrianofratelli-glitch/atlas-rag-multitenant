@@ -77,10 +77,12 @@ def judge_llm():
     """Juiz separado do gerador: temperatura 0 e saída curta."""
     from langchain_anthropic import ChatAnthropic
 
+    from llm_gateway import gateway_settings
+
+    gw = gateway_settings()
     return ChatAnthropic(
         model=os.getenv("EVAL_REFUSAL_JUDGE_MODEL", "claude-sonnet-4-6"),
-        temperature=0, max_tokens=100, api_key=os.environ["ANTHROPIC_API_KEY"],
-        anthropic_api_url=os.getenv("ANTHROPIC_BASE_URL"),
-        default_headers={"Authorization": "Bearer " + os.environ["ANTHROPIC_API_KEY"]},
+        temperature=0, max_tokens=100, api_key=gw["api_key"],
+        anthropic_api_url=gw["base_url"], default_headers=gw["headers"],
         timeout=float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "45")), max_retries=2,
     )
