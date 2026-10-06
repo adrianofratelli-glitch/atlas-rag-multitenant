@@ -84,19 +84,28 @@ Ingestion accepts PDF, DOCX, TXT, CSV, Markdown, HTML, JSON, XLSX, and PPTX, thr
 python3 -m venv .venv && source .venv/bin/activate
 # Multi-format setup/ingestion (includes the lean API dependencies)
 pip install -r requirements-ingest.txt
-cp .env.example .env          # keys + tenant values (set RAG_NATIVE=1 for the MongoDB 9 path)
-python setup_db_native.py     # collections + autoEmbed vector_index + text_index
-python ingest.py data/document.pdf
+# Optional helper package (gateway validation, injection guardrail). Without it both fail open.
+# pip install -e "../_shared[llm,guardrails]"
+cp .env.example .env          # keys, gateway and tenant values (set RAG_NATIVE=1 for the MongoDB 9 path)
 cp client_config.example.json client_config.json   # starter questions (optional)
-./run.sh                      # backend :8180, frontend :5180
+# Indexes + corpus + embeddings in one idempotent command. It writes to the database, so it
+# refuses any DB_NAME that does not end in _test unless ALLOW_DEMO_DB_WRITE=1 is set on purpose.
+ALLOW_DEMO_DB_WRITE=1 python scripts/reset_demo.py data/document.pdf
+./run.sh                      # backend 127.0.0.1:8180, frontend 127.0.0.1:5180
 ```
+
+`scripts/reset_demo.py` is also the way back to a clean demo: it creates whatever collection or search index is missing (`setup_db_native.py`, or `setup_db.py` on the classic path), re-ingests every corpus file with reset (on the native path Atlas regenerates the embeddings through `autoEmbed`), removes uploaded chunks and any source outside the corpus, clears the tenant's conversations and LangGraph checkpoints (`--keep-conversations` keeps them) and waits until a real retrieval query returns passages. The corpus comes from the arguments, else `DEMO_CORPUS` (comma-separated paths), else every supported file directly under `data/`; two files with the same name stem are refused, because they would become the same `metadata.source`. `--dry-run` prints the plan. On the reference tenant (701 chunks, three documents) a reset takes about 25 seconds.
+
+The individual steps stay available: `python setup_db_native.py`, then `python ingest.py data/document.pdf`. Both write data, so they go through the same `*_test` / `ALLOW_DEMO_DB_WRITE=1` guard.
 
 By default the launcher serves the optimized frontend build without a watcher. For HMR editing run `POV_DEV=1 ./run.sh`; the build is only redone when sources, lockfile, or configuration change.
 
 ```env
 MONGO_URI=
-VOYAGE_API_KEY=
-ANTHROPIC_API_KEY=
+VOYAGE_API_KEY=               # classic path only; the native path needs no Voyage key at query time
+GROVE_BASE_URL=               # LLM gateway (validated by pov-shared), with GROVE_API_KEY
+GROVE_API_KEY=
+# or, without pov-shared: ANTHROPIC_BASE_URL (explicit, required) + ANTHROPIC_API_KEY
 CLIENT_ID=tenant_id           # the database becomes rag_<CLIENT_ID>
 CLIENT_NAME=Tenant Name
 DOCUMENT_TITLE=Document Title
@@ -111,7 +120,7 @@ The TTL sets `metadata.expires_at` **only** on chunks uploaded through the UI. T
 
 Uploads run on a single worker: the same VoyageAI quota limits ingestion, so jobs queue instead of competing. A large document takes minutes on the free tier; in a live demo prefer small files or a paid key with a low `VOYAGE_SLEEP_S`.
 
-Tests: `python -m unittest discover -s tests -v` (94 tests, pure logic, no live services). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
+Tests: `python -m unittest discover -s tests -v` (127 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
 
 ## Native retrieval on MongoDB 9
 
@@ -168,20 +177,21 @@ Methodology and reproduction: `./eval/run_all.sh` runs everything. There are **t
 
 ## Observability and resilience
 
-Everything is opt-in and the default preserves the previous behavior (see `.env.example`):
+Resilience is on by default; each variable only tunes or disables it. Tracing and the evidence gate stay opt-in (see `.env.example`):
 
 > `TRACE_SINK` and `RAG_INJECTION_FILTER` rely on optional helper packages (`tracing`, `guardrails`) that are not part of this repository. Without them both features fail open and are no-ops.
 
 | variable | default | effect |
 |---|---|---|
 | `TRACE_SINK` | `off` | `console`/`phoenix`/`atlas`: one span per stage (embed, vector, lexical, RRF, rerank, generation) with `client_id`, k, scores, tokens, and TTFT. Enabling it **forces** `TRACE_MASK_PII=1` |
-| `VOYAGE_MAX_ATTEMPTS` | `1` | retry with backoff and jitter on embed and `rerank-2`, only for 429/5xx/timeout/connection errors |
-| `LLM_STREAM_MAX_ATTEMPTS` | `1` | Claude retry **only before the first token**; after that, retrying would duplicate the answer already sent |
-| `STREAM_DEADLINE_S` | `0` | generation ceiling; when exceeded, a readable SSE `error` event instead of a hanging connection |
-| `RAG_INJECTION_FILTER` | `0` | drops retrieved passages with a prompt-injection pattern before the prompt |
+| `VOYAGE_MAX_ATTEMPTS` | `3` | retry with backoff and jitter on embed and `rerank-2` (classic path), only for 429/5xx/timeout/connection errors; `1` disables |
+| `LLM_STREAM_MAX_ATTEMPTS` | `3` | Claude retry **only before the first token** (429, 5xx, timeout); after that, retrying would duplicate the answer already sent; `1` disables |
+| `STREAM_DEADLINE_S` | `120` | generation ceiling; when exceeded, a readable SSE `error` event instead of a hanging connection; `0` disables |
+| `RAG_INJECTION_FILTER` | `1` | drops retrieved passages with a prompt-injection pattern before the prompt (offline heuristic, also when the instruction is buried in a long legitimate passage); `0` disables |
+| `CHECKPOINT_TTL_DAYS` | `30` | TTL of the LangGraph checkpoints (defaults to `CONVERSATION_RETENTION_DAYS`); a turn without `thread_id` gets its own throwaway thread; `0` disables |
 | `RAG_REFUSE_WEAK_EVIDENCE` | `0` | explicit refusal, with no LLM call, when the best reranker score falls below `RAG_MIN_RERANK_SCORE` (default 0.65 native, 0.6 classic; calibrated on the `calib` split, confirmed on `test`) |
 
-If the reranker fails, the answer does not fail: the classic path degrades to the pure RRF order (`rerank_degraded`) and the native path to lexical-only (`native_degraded`), flagged in the trace and stats. The same holds for embedding (falls back to lexical-only) and for each index independently.
+If Atlas answers neither the native pipeline nor the lexical fallback, the turn ends with a readable error saying the database did not respond, not with a "no evidence" refusal that would blame the question. If the reranker fails, the answer does not fail: the classic path degrades to the pure RRF order (`rerank_degraded`) and the native path to lexical-only (`native_degraded`), flagged in the trace and stats. The same holds for embedding (falls back to lexical-only) and for each index independently.
 
 The injection filter is a cheap pre-filter, not a control: the real control is the mandatory `metadata.client_id` in both pipelines, covered by the test above.
 
@@ -198,11 +208,11 @@ The native path was attacked on purpose before release. Everything below was run
 
 ## Production boundary
 
-Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access-level filter is applied on both retrieval paths, but the selected level still comes from the client in this PoV. Upload validates extension, size, and file name but, like every endpoint here, does not require authentication: anyone who reaches the API indexes or removes the tenant's documents. An external deployment requires tenant and ACL claims derived from SSO/JWT; never trust an `access_level` coming from the request.
+Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access-level filter is applied on both retrieval paths, but the selected level still comes from the client in this PoV. Upload validates extension, size, and file name but, like every endpoint here, does not require authentication: anyone who reaches the API indexes or removes uploaded documents. The reference corpus is protected on both ends: it cannot be deleted through the API (403), and an upload whose name matches a reference document is refused (422), because re-indexing it would have deleted the corpus. An external deployment requires tenant and ACL claims derived from SSO/JWT; never trust an `access_level` coming from the request.
 
 ## Adding a tenant
 
-Set the tenant values in `.env`, put the document in `data/`, customize `client_config.json`, then run `setup_db.py` → `ingest.py` → `run.sh`. Each tenant gets its own database (`rag_<CLIENT_ID>`). `data/`, `assets/`, and `client_config.json` are gitignored, so nothing tenant-specific reaches the repository.
+Set the tenant values in `.env`, put the document in `data/`, customize `client_config.json`, then run `scripts/reset_demo.py` → `run.sh`. Each tenant gets its own database (`rag_<CLIENT_ID>`). `data/`, `assets/`, and `client_config.json` are gitignored, so nothing tenant-specific reaches the repository.
 
 ## Layout
 
@@ -215,6 +225,8 @@ ingest.py             multi-format ingestion (--nivel sets the access level)
 backend/documents.py  document library: upload, ingestion jobs, upload removal
 setup_db.py           classic path: collections and the two search indexes
 setup_db_native.py    native path: collections, autoEmbed vector index, text index
+scripts/reset_demo.py one-command reset: indexes, corpus, embeddings, cleanup, readiness probe
+llm_gateway.py        LLM destination: Grove settings (pov-shared) or an explicit ANTHROPIC_BASE_URL
 config.py db.py       configuration and shared Mongo client
 observability.py      structured logging + /api/metrics
 ```

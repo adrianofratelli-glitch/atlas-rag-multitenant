@@ -40,7 +40,7 @@ Total nesta versão: **9 aggregation pipelines / operações de leitura ou escri
 
 ### 1. `vector_index` — Atlas Vector Search
 
-**Onde:** `setup_db.py:46-62`
+**Onde:** `setup_db.py:47-63`
 
 ```python
 vector_def = {
@@ -62,7 +62,7 @@ docs.update_search_index("vector_index", vector_def)
 
 ### 2. `text_index` — Atlas Search (BM25 / lexical)
 
-**Onde:** `setup_db.py:65-78`
+**Onde:** `setup_db.py:66-79`
 
 ```python
 text_def = {"mappings": {"dynamic": False, "fields": {
@@ -82,7 +82,7 @@ docs.create_search_index({"name": "text_index", "type": "search", "definition": 
 
 ### 3. `updated_at_ttl` — TTL de conversas
 
-**Onde:** `setup_db.py:25-29`
+**Onde:** `setup_db.py:26-30`
 
 ```python
 db["conversations"].create_index(
@@ -96,7 +96,7 @@ db["conversations"].create_index(
 
 ### 4. `uploads_ttl` — TTL de uploads de demo
 
-**Onde:** `setup_db.py:34-38`
+**Onde:** `setup_db.py:35-39`
 
 ```python
 db["documents"].create_index(
@@ -315,17 +315,17 @@ get_client()[DB_NAME]["documents"].delete_many(
 
 ### 13. `count_documents` — checagem de "já indexado"
 
-**Onde:** `ingest.py:160`
+**Onde:** `ingest.py:203`
 
 ```python
 collection.count_documents({"metadata.source": source_name})
 ```
 
-Se > 0 e `reset=False`, levanta `AlreadyIndexedError` (evita reindexar sem intenção). Se `reset=True`, roda um `delete_many({"metadata.source": source_name})` (linha 167) antes de reingerir.
+Se > 0 e `reset=False`, levanta `AlreadyIndexedError` (evita reindexar sem intenção). Se `reset=True`, roda um `delete_many({"metadata.source": source_name})` antes de reingerir; numa ingestão com TTL (upload), o filtro ganha `metadata.expires_at: {$exists: true}` e, se existir chunk permanente com o mesmo `source`, a ingestão levanta `ProtectedSourceError` sem apagar nada. O upload já recusa antes (`documents.start_ingestion` → `is_protected`).
 
 ### 14. `insert_many` — gravação dos chunks + embeddings
 
-**Onde:** `ingest.py:227`
+**Onde:** `ingest.py:45` (nativo) e `ingest.py:295` (clássico)
 
 ```python
 collection.insert_many(docs_to_insert)
