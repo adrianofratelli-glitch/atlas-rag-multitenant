@@ -71,7 +71,7 @@ start() {
   # Backend
   pid="$(pid_on_port "$BACKEND_PORT" || true)"
   if [ -z "$pid" ]; then
-    nohup .venv/bin/uvicorn backend.api:app --port "$BACKEND_PORT" > "$LOG_DIR/backend.log" 2>&1 < /dev/null &
+    nohup .venv/bin/uvicorn backend.api:app --host 127.0.0.1 --port "$BACKEND_PORT" > "$LOG_DIR/backend.log" 2>&1 < /dev/null &
     echo "backend  started  -> http://localhost:$BACKEND_PORT"
   elif mine "$pid"; then echo "backend  already up (pid $pid)"
   else echo "Port $BACKEND_PORT is used by another project — aborting."; exit 1; fi
