@@ -7,7 +7,9 @@ const PHASE_LABEL = {
   queued: 'na fila',
   loading: 'lendo o arquivo',
   embedding: 'gerando embeddings',
-  done: 'concluído',
+  indexing: 'sincronizando índices (Search + Vector Search)',
+  indexing_timeout: 'índices ainda sincronizando',
+  done: 'pronto para consulta',
   error: 'erro',
 }
 
@@ -166,7 +168,7 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
           </div>
           )}
 
-          {job && job.status !== 'done' && (
+          {job && (job.status !== 'done' || job.searchable === false) && (
             <div className="docs-job">
               <div className="docs-job-head">
                 <span>{job.filename}</span>
@@ -184,9 +186,12 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
                   }}
                 />
               </div>
-              <p className="docs-hint">
-                O tier gratuito da VoyageAI limita 3 requisições por minuto — documentos
-                grandes levam alguns minutos.
+              <p className="docs-hint" aria-live="polite">
+                {job.phase === 'indexing'
+                  ? 'Os chunks já estão no Atlas; o documento fica disponível para perguntas assim que os dois índices o encontrarem.'
+                  : job.phase === 'indexing_timeout'
+                    ? 'Os índices ainda não devolvem este documento. Aguarde alguns segundos antes de perguntar sobre ele.'
+                    : 'Documentos grandes levam alguns minutos para ser processados.'}
               </p>
             </div>
           )}
