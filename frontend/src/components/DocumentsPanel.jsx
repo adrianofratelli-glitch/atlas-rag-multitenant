@@ -179,7 +179,7 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
               </div>
               <div className="src-track">
                 <div
-                  className="src-fill"
+                  className={`src-fill${job.phase === 'indexing' ? ' syncing' : ''}`}
                   style={{
                     width: `${job.status === 'error' ? 100 : pct}%`,
                     background: job.status === 'error' ? '#FF6960' : C.green,

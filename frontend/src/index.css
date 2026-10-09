@@ -252,6 +252,9 @@ body::after {
 .src-head { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 10px; margin-bottom: 8px; }
 .src-track { height: 5px; background: rgba(255, 255, 255, 0.06); border-radius: 3px; overflow: hidden; }
 .src-fill { height: 100%; border-radius: 3px; }
+/* Upload em sincronização de índices: chunks já gravados, ainda não consultáveis. */
+.src-fill.syncing { animation: pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .src-fill.syncing { animation: none; } }
 
 /* ===== Suggestions (pillar-style cards) ===== */
 .sugg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
