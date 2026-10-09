@@ -85,6 +85,11 @@ class _FakeDB(dict):
         return self.setdefault(name, _FakeAggregateCollection())
 
 
+def api_module_client_id():
+    import backend.api as api_module
+    return api_module.CLIENT_ID
+
+
 class TestDocumentOutlineACL(unittest.TestCase):
     """The outline (injected into the system prompt) must respect the caller's
     ACL — same access-control filter used by retrieval, not the whole
@@ -115,7 +120,10 @@ class TestDocumentOutlineACL(unittest.TestCase):
         pipeline = col.calls[-1]
         self.assertEqual(
             pipeline[0],
-            {"$match": {"metadata.nivel_acesso": {"$in": ["publico"]}}},
+            {"$match": {"$and": [
+                {"metadata.client_id": api_module_client_id()},
+                {"metadata.nivel_acesso": {"$in": ["publico"]}},
+            ]}},
         )
 
     def test_outline_cache_key_varies_by_access_level(self):

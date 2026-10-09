@@ -218,12 +218,15 @@ Depois, o conjunto fundido passa por `voyage.rerank(query, documents, model="rer
 
 ### 8. `$match` + `$group` — outline por página
 
-**Onde:** `backend/api.py::_get_document_outline`, linhas 250-284.
+**Onde:** `backend/api.py::_get_document_outline` (filtro em `_outline_match`).
 
 ```python
 get_client()[DB_NAME]["documents"].aggregate([
-    {"$match": {"metadata.nivel_acesso": {"$in": access_levels},
-                "metadata.source": {"$in": sources}}},   # segunda condição só se houver sources
+    {"$match": {"$and": [
+        {"metadata.client_id": CLIENT_ID},                 # mesmo filtro de tenant da busca
+        {"metadata.nivel_acesso": {"$in": access_levels}},
+        {"metadata.source": {"$in": sources}},             # só se houver sources
+    ]}},
     {"$sort": {"metadata.page": 1, "metadata.chunk_id": 1}},
     {"$group": {
         "_id": {"source": "$metadata.source", "page": "$metadata.page"},
@@ -236,9 +239,9 @@ get_client()[DB_NAME]["documents"].aggregate([
 
 **O que faz:** monta um "sumário" (documento + página → início do conteúdo) usado dentro do bloco de instruções do system prompt do Claude.
 
-**Por que existe:** dois motivos. (1) Ajuda o modelo a citar a página certa. (2) É um truque de prompt caching: a Anthropic só efetiva cache de prefixo acima de ~1024 tokens, e o bloco de instruções estáticas sozinho (~120 tokens) nunca chega lá — sem o outline, o `cache_control: ephemeral` seria um no-op silencioso. O outline é estável entre turnos (muda só quando o corpus muda), então empurra o bloco para cima do mínimo e o cache passa a valer de verdade. É cacheado em memória por 1h, com chave `(corpus_version, access_levels, sources)`.
+**Por que existe:** dois motivos. (1) Ajuda o modelo a citar a página certa. (2) É um truque de prompt caching: a Anthropic só efetiva cache de prefixo acima de ~1024 tokens, e o bloco de instruções estáticas sozinho (~120 tokens) nunca chega lá — sem o outline, o `cache_control: ephemeral` seria um no-op silencioso. O outline é estável entre turnos (muda só quando o corpus muda), então empurra o bloco para cima do mínimo e o cache passa a valer de verdade. É cacheado em memória por 60 s (`OUTLINE_CACHE_TTL_S`), com chave `(CLIENT_ID, corpus_version, access_levels, sources)`; todo upload concluído e todo delete limpam o cache (`documents.register_corpus_change_hook`). Cada linha passa pelo mesmo filtro de prompt injection dos trechos, e o cabeçalho diz ao modelo que o sumário é mapa de páginas, não evidência.
 
-**Atenção de segurança:** a chave do cache **precisa** incluir `access_levels` — sem isso, o outline construído para um chamador `restrito` vazaria (via cache) um preview de páginas restritas para um chamador `publico` seguinte. Isso já foi um bug real do repositório, corrigido.
+**Atenção de segurança:** o sumário vai para o prompt junto com os trechos, então precisa do **mesmo** filtro da busca: tenant, nível de acesso e documentos. Dois bugs reais já passaram por aqui: (1) sem `access_levels` na chave, um chamador `publico` recebia pelo cache o sumário de um `restrito`; (2) até 2026-10-08 o `$match` não tinha `metadata.client_id`, e um chunk de outro tenant com o mesmo `source` entrava no prompt e ficava no cache depois do delete. Regressão em `tests/test_auxiliary_context_isolation.py`.
 
 ---
 
@@ -246,10 +249,11 @@ get_client()[DB_NAME]["documents"].aggregate([
 
 ### 9. Listagem de documentos com contagem de chunks — `$group` + `$facet`
 
-**Onde:** `backend/documents.py::list_documents`, linhas 99-116.
+**Onde:** `backend/documents.py::list_documents`.
 
 ```python
 get_client()[DB_NAME]["documents"].aggregate([
+    {"$match": {"metadata.client_id": CLIENT_ID}},        # tenant_filter(): todo helper deste módulo
     {"$group": {
         "_id": "$metadata.source",
         "chunks": {"$sum": 1},
@@ -271,26 +275,28 @@ get_client()[DB_NAME]["documents"].aggregate([
 
 ### 10. Resolução de workspace (base vs. uploads) — `distinct`
 
-**Onde:** `backend/documents.py::sources_for_scope`, linhas 145-172.
+**Onde:** `backend/documents.py::sources_for_scope`.
 
 ```python
 get_client()[DB_NAME]["documents"].distinct(
     "metadata.source",
-    {"metadata.expires_at": {"$exists": True}},   # True = uploads da demo; False = corpus base
+    {"metadata.client_id": CLIENT_ID,
+     "metadata.expires_at": {"$exists": True}},   # True = uploads da demo; False = corpus base
 )
 ```
 
 **O que faz:** devolve a lista de `source` (nomes de documento) que pertencem a um dos dois workspaces da UI. `scope == "all"` não roda nada, devolve `None` (sem escopo).
 
-**Por que existe:** é a query que implementa a separação das duas abas da tela (`Corpus de referência` vs. `Novo conteúdo`) **sem criar banco, índice ou campo novo** — só reusa o carimbo TTL que já existia para outro motivo (query 4). Cacheado por `(corpus_version, scope)` para não rodar um `distinct` a cada turno de chat.
+**Por que existe:** é a query que implementa a separação das duas abas da tela (`Corpus de referência` vs. `Novo conteúdo`) **sem criar banco, índice ou campo novo** — só reusa o carimbo TTL que já existia para outro motivo (query 4). Cacheado por `(CLIENT_ID, corpus_version, scope)` para não rodar um `distinct` a cada turno de chat.
 
 ### 11. `is_protected` — dois `count_documents` para proteger o corpus base
 
-**Onde:** `backend/documents.py::is_protected`, linhas 175-186.
+**Onde:** `backend/documents.py::is_protected`.
 
 ```python
-col.count_documents({"metadata.source": source}, limit=1)
-col.count_documents({"metadata.source": source, "metadata.expires_at": {"$exists": True}}, limit=1)
+col.count_documents({"metadata.client_id": CLIENT_ID, "metadata.source": source}, limit=1)
+col.count_documents({"metadata.client_id": CLIENT_ID, "metadata.source": source,
+                     "metadata.expires_at": {"$exists": True}}, limit=1)
 ```
 
 **O que faz:** um documento é "protegido" (não removível pela UI) se existir mas **nenhum** de seus chunks tiver `metadata.expires_at` — ou seja, foi ingerido por CLI, não por upload.
@@ -299,15 +305,34 @@ col.count_documents({"metadata.source": source, "metadata.expires_at": {"$exists
 
 ### 12. Remoção de documento — `delete_many` com segunda trava
 
-**Onde:** `backend/documents.py::delete_document`, linhas 189-198.
+**Onde:** `backend/documents.py::delete_document`.
 
 ```python
 get_client()[DB_NAME]["documents"].delete_many(
-    {"metadata.source": source, "metadata.expires_at": {"$exists": True}}
+    {"metadata.client_id": CLIENT_ID, "metadata.source": source,
+     "metadata.expires_at": {"$exists": True}}
 )
 ```
 
 **Por que existe:** mesmo depois de `is_protected` já ter barrado a chamada, o próprio `delete_many` só casa chunks que **têm** `expires_at` — uma segunda trava (defesa em profundidade) para que um documento "misto" nunca consiga levar o corpus base junto.
+
+### 12b. Prontidão do upload — `$searchMeta` + `$vectorSearch`
+
+**Onde:** `backend/documents.py::wait_until_searchable`, chamado por `_run_job` depois do `insert_many`.
+
+```python
+# léxico: quantos chunks do documento o text_index já devolve
+{"$searchMeta": {"index": "text_index", "compound": {"filter": [
+    {"in": {"path": "metadata.client_id", "value": [CLIENT_ID]}},
+    {"in": {"path": "metadata.source", "value": [source]}}]},
+    "count": {"type": "total"}}}
+# vetorial: uma busca restrita ao documento (autoEmbed embeda o texto de um chunk dele)
+{"$vectorSearch": {"index": "vector_index", "path": "text", "query": amostra, "model": "voyage-4",
+    "numCandidates": 20, "limit": 1,
+    "filter": {"$and": [{"metadata.client_id": CLIENT_ID}, {"metadata.source": {"$in": [source]}}]}}}
+```
+
+**Por que existe:** os índices de Search e Vector Search sincronizam de forma assíncrona. Logo depois do `insert_many` os chunks existem, mas a consulta ainda não os acha: medido no review de 2026-10-08, ~9 s de recusas "sem evidência" depois de o job dizer `done`. O job agora fica em `phase: indexing` até o léxico contar todos os chunks e o vetorial devolver um; só então vira `done` com `searchable: true`. Passado `UPLOAD_INDEX_WAIT_S` (120 s), termina com `searchable: false` e `phase: indexing_timeout`, e a UI mantém o aviso de que os índices ainda sincronizam. No caminho clássico o vetorial usa o `embedding` gravado no chunk como `queryVector`.
 
 ---
 
@@ -315,11 +340,13 @@ get_client()[DB_NAME]["documents"].delete_many(
 
 ### 13. `count_documents` — checagem de "já indexado"
 
-**Onde:** `ingest.py:203`
+**Onde:** `ingest.py::ingest`
 
 ```python
-collection.count_documents({"metadata.source": source_name})
+collection.count_documents({"metadata.client_id": CLIENT_ID, "metadata.source": source_name})
 ```
+
+Contagem, reset e checagem de chunk permanente levam `metadata.client_id`: um documento de outro tenant com o mesmo nome nunca é contado nem apagado daqui.
 
 Se > 0 e `reset=False`, levanta `AlreadyIndexedError` (evita reindexar sem intenção). Se `reset=True`, roda um `delete_many({"metadata.source": source_name})` antes de reingerir; numa ingestão com TTL (upload), o filtro ganha `metadata.expires_at: {$exists: true}` e, se existir chunk permanente com o mesmo `source`, a ingestão levanta `ProtectedSourceError` sem apagar nada. O upload já recusa antes (`documents.start_ingestion` → `is_protected`).
 

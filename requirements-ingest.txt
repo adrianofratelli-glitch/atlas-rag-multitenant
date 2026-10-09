@@ -10,3 +10,7 @@ python-pptx>=1.0,<2
 
 # Document loaders used by ingest.py (PDF/DOCX/TXT/CSV/HTML) and bench/corpus_stats.py.
 langchain-community>=0.4,<0.5
+
+# Local venv only (tracing extra of pov-shared, opt-in via TRACE_SINK): 2.1.5 with
+# langchain-anthropic breaks ChatAnthropic when tracing is on. Floor, not in the API image.
+openinference-instrumentation-anthropic>=2.1.7,<3

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 1.3.1 (2026-10-08)
+
+Fixes from an independent review.
+
+- Fix (tenant isolation): the page outline appended to the system prompt filtered by access level and document but not by `metadata.client_id`, so a chunk of another tenant in the same collection with the same `source` reached the prompt, and the in-memory cache kept it after the chunk was deleted. The outline now uses the same tenant + ACL + source filter as retrieval, goes through the prompt-injection filter, is labelled as a page map (not evidence), and its cache is keyed by tenant, cleared on every upload/delete and limited to 60 s.
+- Fix (tenant isolation): document listing, workspace scope, base-corpus protection, delete and `ingest(reset=True)` are tenant-scoped too; a same-named document of another tenant is never listed, counted or deleted.
+- Fix: an upload was reported `done` before the search indexes could return it (about 9 s of false "no evidence" answers). The job now stays in phase `indexing` until a tenant-filtered `$searchMeta` and `$vectorSearch` find it; on timeout it ends with `searchable: false` and the UI says so.
+- Tests: `tests/test_auxiliary_context_isolation.py` (cold leak, leak after delete, cache invalidation, tenant-scoped helpers, upload readiness).
+- Local venv: `pov-shared` editable install refreshed to 0.2.0 (`uv pip install --no-deps -e ../_shared`); `openinference-instrumentation-anthropic>=2.1.7,<3` in `requirements-ingest.txt` (2.1.5 broke `ChatAnthropic` with tracing on). Checked: `TRACE_SINK=console` + a streamed Grove turn works.
+
 ## 1.3.0 (2026-10-06)
 
 Hardening after an adversarial review.

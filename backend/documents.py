@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
-from config import DB_NAME
+from config import CLIENT_ID, DB_NAME, NATIVE_EMBED_MODEL, NATIVE_ENABLED
 from db import get_client
 from ingest import SUPPORTED_FORMATS, AlreadyIndexedError, ingest
 
@@ -40,6 +40,28 @@ _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest")
 # Bumped whenever the corpus changes, so cached derivations (the document
 # outline in backend/api.py) can key off it instead of waiting out a TTL.
 corpus_version = 0
+# Derived caches outside this module (the outline in backend/api.py) register a
+# callback here so a delete/upload clears them immediately, not only by key change.
+_corpus_change_hooks: list = []
+
+# An upload is announced "done" only once both search indexes return it: Atlas
+# Search / Vector Search sync asynchronously, so right after insert_many the
+# chunks exist but a query still misses them (measured: ~9 s of false refusals).
+UPLOAD_INDEX_WAIT_S = float(os.getenv("UPLOAD_INDEX_WAIT_S", "120"))
+UPLOAD_INDEX_POLL_S = float(os.getenv("UPLOAD_INDEX_POLL_S", "1"))
+
+
+def tenant_filter(extra: dict | None = None) -> dict:
+    """Every query of this module is scoped to the tenant, like retrieval is."""
+    flt = {"metadata.client_id": CLIENT_ID}
+    if extra:
+        flt.update(extra)
+    return flt
+
+
+def register_corpus_change_hook(fn) -> None:
+    if fn not in _corpus_change_hooks:
+        _corpus_change_hooks.append(fn)
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
@@ -106,6 +128,7 @@ def list_documents() -> dict:
     what's shown, not just that some were cut.
     """
     pipeline = [
+        {"$match": tenant_filter()},
         {"$group": {
             "_id": "$metadata.source",
             "chunks": {"$sum": 1},
@@ -162,7 +185,7 @@ def sources_for_scope(scope: str) -> list[str] | None:
     """
     if scope == "all":
         return None
-    key = (corpus_version, scope)
+    key = (CLIENT_ID, corpus_version, scope)
     with _scope_cache_lock:
         entry = _scope_cache.get(key)
         now = time.time()
@@ -171,7 +194,7 @@ def sources_for_scope(scope: str) -> list[str] | None:
     exists = scope == "uploads"
     value = sorted(
         s for s in get_client()[DB_NAME]["documents"].distinct(
-            "metadata.source", {"metadata.expires_at": {"$exists": exists}}
+            "metadata.source", tenant_filter({"metadata.expires_at": {"$exists": exists}})
         ) if s
     )
     with _scope_cache_lock:
@@ -188,10 +211,10 @@ def is_protected(source: str) -> bool:
     corpus the demo is built on and must never be removable from the app.
     """
     col = get_client()[DB_NAME]["documents"]
-    if col.count_documents({"metadata.source": source}, limit=1) == 0:
+    if col.count_documents(tenant_filter({"metadata.source": source}), limit=1) == 0:
         return False
     return col.count_documents(
-        {"metadata.source": source, "metadata.expires_at": {"$exists": True}}, limit=1
+        tenant_filter({"metadata.source": source, "metadata.expires_at": {"$exists": True}}), limit=1
     ) == 0
 
 
@@ -201,7 +224,7 @@ def delete_document(source: str) -> int:
     result = get_client()[DB_NAME]["documents"].delete_many(
         # Belt and braces: even past the guard, only TTL-stamped (uploaded)
         # chunks can be deleted, so a mixed source can't take the corpus with it.
-        {"metadata.source": source, "metadata.expires_at": {"$exists": True}}
+        tenant_filter({"metadata.source": source, "metadata.expires_at": {"$exists": True}})
     )
     _bump_corpus_version()
     return result.deleted_count
@@ -211,6 +234,70 @@ def _bump_corpus_version() -> None:
     global corpus_version
     with _jobs_lock:
         corpus_version += 1
+    for hook in list(_corpus_change_hooks):
+        try:
+            hook()
+        except Exception:  # noqa: BLE001 — a cache hook must never fail a delete/upload
+            logger.exception("corpus change hook failed")
+
+
+def _lexical_count(col, source: str) -> int:
+    rows = list(col.aggregate([{"$searchMeta": {
+        "index": "text_index",
+        "compound": {"filter": [
+            {"in": {"path": "metadata.client_id", "value": [CLIENT_ID]}},
+            {"in": {"path": "metadata.source", "value": [source]}},
+        ]},
+        "count": {"type": "total"},
+    }}]))
+    return int(((rows[0] if rows else {}).get("count") or {}).get("total", 0))
+
+
+def _vector_hit(col, source: str, sample: dict) -> bool:
+    flt = {"$and": [{"metadata.client_id": CLIENT_ID}, {"metadata.source": {"$in": [source]}}]}
+    if NATIVE_ENABLED:
+        stage = {"index": "vector_index", "path": "text", "query": sample["text"][:500],
+                 "model": NATIVE_EMBED_MODEL, "numCandidates": 20, "limit": 1, "filter": flt}
+    else:
+        if not sample.get("embedding"):
+            return True  # nothing to probe with; the lexical check already passed
+        stage = {"index": "vector_index", "path": "embedding", "queryVector": sample["embedding"],
+                 "numCandidates": 20, "limit": 1, "filter": flt}
+    return bool(list(col.aggregate([{"$vectorSearch": stage}, {"$project": {"_id": 1}}])))
+
+
+def wait_until_searchable(source: str, expected_chunks: int, *, timeout_s: float | None = None,
+                          poll_s: float | None = None, on_poll=None) -> bool:
+    """Poll both indexes until the upload is retrievable with the tenant filter.
+
+    Lexical: $searchMeta count of the source's chunks reaches what was inserted.
+    Vector: one $vectorSearch restricted to the source returns a hit. Returns
+    False on timeout (the caller reports "still indexing" instead of "ready").
+    """
+    timeout_s = UPLOAD_INDEX_WAIT_S if timeout_s is None else timeout_s
+    poll_s = UPLOAD_INDEX_POLL_S if poll_s is None else poll_s
+    col = get_client()[DB_NAME]["documents"]
+    sample = col.find_one(tenant_filter({"metadata.source": source}),
+                          {"text": 1, "embedding": 1}) or {}
+    if not sample.get("text"):
+        return False
+    deadline = time.monotonic() + timeout_s
+    lexical_ok = vector_ok = False
+    while True:
+        try:
+            if not lexical_ok:
+                lexical_ok = _lexical_count(col, source) >= max(1, expected_chunks)
+            if lexical_ok and not vector_ok:
+                vector_ok = _vector_hit(col, source, sample)
+        except Exception:  # noqa: BLE001 — a transient index error just means "not yet"
+            logger.warning("index readiness probe failed source=%s", source, exc_info=True)
+        if on_poll:
+            on_poll(lexical_ok, vector_ok)
+        if lexical_ok and vector_ok:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll_s)
 
 
 def _snapshot(job: dict) -> dict:
@@ -302,12 +389,24 @@ def _run_job(job_id: str, path: str, source: str, nivel_acesso: str, reset: bool
             verbose=False,
             ttl_hours=UPLOAD_TTL_HOURS,
         )
+        # Chunks are in the collection: the listing and the scope may see the
+        # source now, but the job stays "running/indexing" until a query finds it.
+        _bump_corpus_version()
+        _update(job_id, phase="indexing", chunks=result["chunks"],
+                expires_at=result["expires_at"], searchable=False)
+        t_index = time.monotonic()
+        searchable = wait_until_searchable(
+            source, result["chunks"],
+            on_poll=lambda lex, vec: _update(job_id, index_lexical=lex, index_vector=vec),
+        )
         _update(
             job_id,
             status="done",
-            phase="done",
+            phase="done" if searchable else "indexing_timeout",
             chunks=result["chunks"],
             expires_at=result["expires_at"],
+            searchable=searchable,
+            index_wait_s=round(time.monotonic() - t_index, 3),
             finished_at=time.time(),
         )
         _bump_corpus_version()

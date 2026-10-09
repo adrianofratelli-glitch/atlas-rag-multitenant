@@ -51,7 +51,7 @@ from config import (
     DEFAULT_FOLLOWUPS,
     SYSTEM_PROMPT_EXTRA,
 )
-from agent import MODEL
+from agent import INJECTION_FILTER, MODEL
 from backend import documents
 from db import get_client, verify_tenant_identity
 
@@ -313,30 +313,69 @@ SYSTEM_PROMPT = SYSTEM_PROMPT_STATIC + "\n\nCONTEXTO:\n{context}"
 # on re-ingestion), pushes the block well past the minimum, and doubles as a
 # map that helps the model cite the right pages.
 _outline_lock = threading.Lock()
-# key: (corpus_version, access_levels tuple, selected sources tuple) -> {"ts", "text"}
-# access_levels is part of the key (not just corpus_version): the outline is
-# built from a $match over the whole `documents` collection, and without the
-# ACL filter it would leak a preview of `restrito` pages to `publico` callers
-# — including cross-contamination through the cache if the key didn't vary by
-# access level too.
+# key: (CLIENT_ID, corpus_version, access_levels tuple, selected sources tuple) -> {"ts", "text"}
+# The outline goes into the prompt next to the retrieved chunks, so it must pass
+# the SAME filter as retrieval: tenant (metadata.client_id), ACL and the selected
+# sources. Every one of those is part of the key too, so the cache can never hand
+# one caller's outline to another. Before 2026-10-08 the $match had no client_id:
+# a chunk of another tenant sharing the collection (and a source name) reached
+# the system prompt, and the cache kept it after the chunk was deleted.
 _outline_cache: dict[tuple, dict] = {}
-_OUTLINE_TTL_S = 3600
+# Short TTL on top of corpus_version: deletes that bypass the API (TTL sweep of
+# expired uploads, a script, another process) cannot bump corpus_version, so a
+# stale preview must not outlive them by long. Rebuilding is one aggregation and
+# yields the same text, so the Anthropic prompt cache still hits.
+_OUTLINE_TTL_S = float(os.getenv("OUTLINE_CACHE_TTL_S", "60"))
 _OUTLINE_CACHE_MAX = 16
+OUTLINE_HEADER = (
+    "SUMÁRIO DOS DOCUMENTOS (mapa de páginas, filtrado pelo mesmo tenant, perfil de acesso "
+    "e documentos da busca; não é evidência: responda e cite somente o CONTEXTO):"
+)
+
+
+def invalidate_outline_cache() -> None:
+    """Drop every cached outline. Registered as a corpus-change hook in backend.documents."""
+    with _outline_lock:
+        _outline_cache.clear()
+
+
+documents.register_corpus_change_hook(invalidate_outline_cache)
+
+
+def _outline_match(access_levels: list, sources: list | None) -> dict:
+    """Same pre-filter as retrieval (agent/native_retrieval): tenant + ACL (+ sources)."""
+    conditions = [
+        {"metadata.client_id": CLIENT_ID},
+        {"metadata.nivel_acesso": {"$in": list(access_levels)}},
+    ]
+    if sources:
+        conditions.append({"metadata.source": {"$in": list(sources)}})
+    return {"$and": conditions}
+
+
+def _outline_line_is_safe(line: str) -> bool:
+    """Same injection heuristic applied to retrieved chunks (fail-open without pov-shared)."""
+    try:
+        from guardrails import check_injection
+    except ImportError:
+        return True
+    try:
+        return check_injection(line, use_llm=False).ok
+    except Exception:  # noqa: BLE001 — a broken heuristic must not drop the turn
+        logger.exception("injection check on outline failed")
+        return True
 
 
 def _get_document_outline(access_levels: list, sources: list | None = None) -> str:
-    key = (documents.corpus_version, tuple(sorted(access_levels)), tuple(sorted(sources or [])))
+    key = (CLIENT_ID, documents.corpus_version, tuple(sorted(access_levels)), tuple(sorted(sources or [])))
     with _outline_lock:
         entry = _outline_cache.get(key)
         now = time.time()
         if entry and now - entry["ts"] < _OUTLINE_TTL_S and entry["text"]:
             return entry["text"]
         try:
-            match_filter = {"metadata.nivel_acesso": {"$in": access_levels}}
-            if sources:
-                match_filter = {"$and": [match_filter, {"metadata.source": {"$in": sources}}]}
             rows = get_client()[DB_NAME]["documents"].aggregate([
-                {"$match": match_filter},
+                {"$match": _outline_match(access_levels, sources)},
                 {"$sort": {"metadata.page": 1, "metadata.chunk_id": 1}},
                 {"$group": {
                     "_id": {"source": "$metadata.source", "page": "$metadata.page"},
@@ -349,7 +388,9 @@ def _get_document_outline(access_levels: list, sources: list | None = None) -> s
                 f"{r['_id']['source']} p.{r['_id']['page']}: {' '.join(r['preview'].split())[:160]}"
                 for r in rows
             ]
-            text = "SUMÁRIO DOS DOCUMENTOS (documento, página: início do conteúdo):\n" + "\n".join(lines) if lines else ""
+            if INJECTION_FILTER:
+                lines = [line for line in lines if _outline_line_is_safe(line)]
+            text = OUTLINE_HEADER + "\n" + "\n".join(lines) if lines else ""
             text = text[:MAX_OUTLINE_CHARS]
         except Exception:
             logger.exception("document outline build failed — caching disabled this turn")

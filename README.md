@@ -1,6 +1,6 @@
 # Multi-tenant RAG on MongoDB Atlas
 
-Ask a natural-language question about a set of long planning documents and get an answer with citations in seconds. One MongoDB Atlas aggregation embeds the question, runs vector and lexical search, fuses the rankings, and reranks the passages; Claude then answers using only those, streaming token by token.
+Ask a natural-language question about a set of long planning documents and get an answer with citations in seconds. One MongoDB Atlas aggregation embeds the question, runs vector and lexical search, fuses the rankings, and reranks the passages; Claude then answers from those passages, streaming token by token. Everything that reaches the prompt (the passages and a page outline used as a citation map) passes the same tenant, access-level and document filter as the search.
 
 Tenant-agnostic by design: no customer, document, or brand name lives in the repository. A new tenant is one `.env`, one PDF, and one JSON file. The UI also lets you upload a new document and chat with it right away: the same ingestion pipeline, no command line, in a separate tab that never mixes with the reference corpus.
 
@@ -72,9 +72,9 @@ graph TD
     API <-->|conversation| MDB[(Atlas · conversations)]
 ```
 
-If one of the two indexes fails, the other carries the query. The stable instruction block (including a document outline) is cached on the Anthropic API, so repeated turns cost less. Conversations are persisted in MongoDB and resumed by thread ID.
+If one of the two indexes fails, the other carries the query. The stable instruction block (including a document outline) is cached on the Anthropic API, so repeated turns cost less. The outline is the first line of each page of the documents in scope; it is built with the same `metadata.client_id` + `nivel_acesso` + `metadata.source` filter as the search, goes through the same prompt-injection filter, and is labelled in the prompt as a page map, not as evidence. Its in-memory cache is keyed by tenant, access level and documents, is cleared on every upload and delete, and expires after 60 s (`OUTLINE_CACHE_TTL_S`) so a delete outside the API (TTL sweep, script) does not linger. Conversations are persisted in MongoDB and resumed by thread ID.
 
-Ingestion accepts PDF, DOCX, TXT, CSV, Markdown, HTML, JSON, XLSX, and PPTX, through the CLI (`ingest.py`) or the UI upload, which enqueues a job and reports progress at `/api/documents/jobs/{job_id}`. Documents live in the same collection, separated by `metadata.source`, which is a filter field in both search indexes.
+Ingestion accepts PDF, DOCX, TXT, CSV, Markdown, HTML, JSON, XLSX, and PPTX, through the CLI (`ingest.py`) or the UI upload, which enqueues a job and reports progress at `/api/documents/jobs/{job_id}`. The job is reported `done` only when both indexes return the new document (`$searchMeta` count of its chunks and a `$vectorSearch` restricted to it, tenant-filtered); until then it stays in phase `indexing` and the UI says the indexes are syncing. If they take longer than `UPLOAD_INDEX_WAIT_S` (120 s) the job finishes with `searchable: false` and the UI keeps a "still syncing" notice instead of announcing it as ready. Documents live in the same collection, separated by `metadata.source`, which is a filter field in both search indexes.
 
 > Proof of concept: the access level is chosen in the UI for demonstration. In production it would come from authentication (SSO / JWT), never from the client.
 
