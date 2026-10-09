@@ -200,18 +200,21 @@ def ingest(
     collection = client[DB_NAME]["documents"]
 
     source_name = source_name or path.stem
-    existing = collection.count_documents({"metadata.source": source_name})
+    # Tenant-scoped like every other query: a document of another tenant sharing the
+    # collection with the same source name is neither counted nor reset from here.
+    tenant = {"metadata.client_id": CLIENT_ID}
+    existing = collection.count_documents({**tenant, "metadata.source": source_name})
 
     if existing > 0 and not reset:
         raise AlreadyIndexedError(source_name, existing)
 
     if reset and existing > 0:
-        reset_filter = {"metadata.source": source_name}
+        reset_filter = {**tenant, "metadata.source": source_name}
         if ttl_hours and ttl_hours > 0:
             # Disposable (TTL) ingestion only ever replaces disposable chunks: a reset here
             # must not take a permanent (reference-corpus) document with the same name.
             permanent = collection.count_documents(
-                {"metadata.source": source_name, "metadata.expires_at": {"$exists": False}}, limit=1)
+                {**tenant, "metadata.source": source_name, "metadata.expires_at": {"$exists": False}}, limit=1)
             if permanent:
                 raise ProtectedSourceError(source_name)
             reset_filter["metadata.expires_at"] = {"$exists": True}
