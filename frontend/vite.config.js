@@ -27,7 +27,7 @@ export default defineConfig({
     host: '127.0.0.1',
     proxy: apiProxy,
   },
-  preview: { port: 5180, strictPort: true, host: '127.0.0.1', proxy: apiProxy },
+  preview: { host: '127.0.0.1', port: 5180, strictPort: true, proxy: apiProxy },
   build: {
     rollupOptions: {
       output: {

@@ -93,7 +93,7 @@ REFUSAL_MESSAGE = (
     "Reformule citando o tema, a seção ou o número da ação que você procura."
 )
 
-app = FastAPI(title="RAG · MongoDB Atlas Vector Search (POC)")
+app = FastAPI(title="RAG · MongoDB Atlas Vector Search (POC)", version="1.3.1")
 
 
 @app.on_event("startup")

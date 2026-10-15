@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Atualiza dependências compatíveis e pisos de segurança; alinha metadados de versão entre aplicação e frontend.
+
 ## 1.3.1 (2026-10-08)
 
 Fixes from an independent review.
