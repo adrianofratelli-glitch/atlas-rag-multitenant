@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.4.1 (2026-10-16)
+
+Graph-RAG evaluation made robust, and the pending items of 1.4.0 closed.
+
+- Eval: 12 relational + 8 local questions, the judge reads every pair in both A/B orders (a win only when both agree), same 3,000-token output cap for every setup. Final numbers: the graph beats 8-chunk hybrid retrieval 9/0/3 on relational questions and is close to a 32-chunk hybrid with similar context (5/4/3), citing about twice as many actions and objectives; local facts are about even. The 1.4.0 numbers (5/1 against the wide hybrid) came from a smaller sample and one-order judging.
+- `ANTHROPIC_MAX_TOKENS` default 1500 → 3000, the same for both engines: graph enumerations were cut mid-table.
+- Entity resolution: human merge vetoes (`graph_merge_vetoes` in `client_config.json`), enforced through transitive merges too.
+- `eval/human_review.py`: blind spreadsheet for human labels (audit items and answer pairs, judge verdict hidden) and human × judge agreement with Cohen's kappa.
+- `scripts/graph_entry_scale_test.py`: entry search (`autoEmbed` + `$rankFusion`) plus traversal end to end on synthetic entities.
+- UI: wide tables scroll inside the side-by-side columns; README screenshots for the Graph-RAG tab, side-by-side mode and traversal modal.
+
 ## 1.4.0 (2026-10-16)
 
 Graph-RAG on the same database, as a layer over hybrid retrieval.

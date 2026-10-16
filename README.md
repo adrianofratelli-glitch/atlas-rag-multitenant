@@ -26,6 +26,14 @@ The UI is in Brazilian Portuguese (used in customer sessions); code and this REA
 
 ![New content tab: upload panel open, the uploaded document with its expiry, and an answer generated only from it](docs/screenshots/04-upload.png)
 
+### Graph-RAG tab
+
+![Graph-RAG tab: an answer built from the traversed subgraph, with the side panel replaying the traversal](docs/screenshots/05-graph-rag.png)
+
+![Side by side: hybrid retrieval (the base) and hybrid + graph for the same question, with what each put in the prompt](docs/screenshots/06-compare.png)
+
+![Expanded traversal: entry entities, first and second hop, every stage of the aggregation with this question's numbers, and the declared limits](docs/screenshots/07-graph-modal.png)
+
 > The screenshots run against a real tenant; organization, document, database names, and identifiers quoted in the answers were replaced with neutral ones in the DOM before capture.
 
 ## Why one database
@@ -171,14 +179,14 @@ Chunks cited by the subgraph and a few chunks from a plain hybrid search compete
 
 **In the UI**, the side panel animates the real traversed subgraph of each question: entry points, first hop, second hop, cited chunks, rerank, themes. *Side by side* mode sends every question to both engines and shows what each one put in the prompt.
 
-**Where it helps and where it does not.** The graph wins on enumeration ("every action a unit owns, and the objective of each": the graph has all of the unit's edges, hybrid retrieval has 8 chunks), on chains (objective -> actions -> units), on "which documents mention X" and on corpus-wide questions. On a local fact from a single passage, hybrid retrieval is already right and simpler. `eval/graph_compare.py` sends each question through `/api/chat` to three setups: hybrid (8 chunks), **wide hybrid** (as many chunks as needed to match the graph's prompt size, capped at 32) and graph. A blind LLM judge (random A/B order) compares the graph with each. The wide hybrid is the control for "did the graph win only because it sent more context?". Six relational and four local questions:
+**Where it helps and where it does not.** The graph wins on enumeration ("every action a unit owns, and the objective of each": the graph has all of the unit's edges, hybrid retrieval has 8 chunks), on chains (objective -> actions -> units), on "which documents mention X" and on corpus-wide questions. On a local fact from a single passage, hybrid retrieval is already right and simpler. `eval/graph_compare.py` sends each question through `/api/chat` to three setups: hybrid (8 chunks), **wide hybrid** (as many chunks as needed to match the graph's prompt size, capped at 32) and graph. A blind LLM judge compares the graph with each, **in both A/B orders**; a win counts only when both readings agree, otherwise it is a tie. The wide hybrid is the control for "did the graph win only because it sent more context?". Twelve relational and eight local questions, same output cap (3,000 tokens) for every setup:
 
-| | graph × hybrid 8 (win/loss/tie) | graph × wide hybrid | completeness 1–5 (hybrid 8 / wide / graph) | codes cited (8 / wide / graph) |
+| | graph × hybrid 8 (win/loss/tie) | graph × wide hybrid | completeness 1–5 (8 / wide / graph) | action/objective codes cited (8 / wide / graph) |
 |---|---|---|---|---|
-| relational (6) | 6 / 0 / 0 | 5 / 1 / 0 | 2.83 / 3.17 / 4.17 | 8.5 / 10.3 / 18.2 |
-| local facts (4) | 1 / 2 / 1 | 0 / 3 / 1 | 4.25 / 4.50 / 4.00 | — |
+| relational (12) | 9 / 0 / 3 | 5 / 4 / 3 | 3.12 / 3.62 / 3.79 | 9.8 / 9.9 / 19.3 |
+| local facts (8) | 1 / 1 / 6 | 1 / 3 / 4 | 4.31 / 4.44 / 4.25 | — |
 
-With the same context budget (~23k vs ~30k characters) the graph still wins the relational questions, so the gain comes from structure, not volume. On local facts more chunks beat the graph: its extra facts are noise there. Retrieval is ~0.8 s (hybrid), ~1.2 s (wide), ~2.1 s (graph). The questions are ours, there is no human gold label and the judge is the model that generates: a signal, not a benchmark.
+Read it plainly: the graph clearly beats the hybrid setup people actually run (8 chunks). A hybrid given four times more context (~23k vs ~29k characters) gets close on judged quality, so part of the gain is context volume. What the graph adds on top is coverage: about twice as many distinct actions and objectives cited in enumerations, from explicit relations instead of whatever 32 chunks happened to contain. On local facts the three are about even. Retrieval is ~0.8 s (hybrid), ~1.2 s (wide), ~2.2 s (graph). The questions are ours and the judge is the model that generates: a signal, not a benchmark. `eval/human_review.py` exports a blind spreadsheet to label by hand and reports human × judge agreement (Cohen's kappa).
 
 **Extraction audit (`eval/graph_audit.py`).** 40 entities and 40 relations sampled and checked against the chunk they came from: entities 80% supported, 20% partial, 0% unsupported (type right 95%); relations 75% supported, 25% partial (type or direction off), 0% unsupported. Same judge caveat, so this is an optimistic ceiling; the sample is kept for human review.
 
@@ -194,7 +202,17 @@ With the same context budget (~23k vs ~30k characters) the graph still wins the 
 | 100k | 52 MB | 887 | 259 / 332 ms | ~3 ms | 261 | 275 / 313 ms, 933 |
 | 1M | 530 MB | 2,808 | 277 / 302 ms | ~21 ms | 264 | 312 / 595 ms, 721 (max 3,230) |
 
-Traversal cost stays flat because the hub cutoff bounds the neighbourhood (~260 nodes at any size); without it the neighbourhood and the tail latency grow with the hubs. Entry search (`$vectorSearch`) is not part of this test: embedding a million synthetic entities would cost money and measure nothing about the graph.
+Traversal cost stays flat because the hub cutoff bounds the neighbourhood (~260 nodes at any size); without it the neighbourhood and the tail latency grow with the hubs.
+
+**Entry search at scale (`scripts/graph_entry_scale_test.py`).** 100k synthetic entities with varied text, embedded by the `autoEmbed` index (ready in 375 s, ~270 entities/s), queried with the real `graph_retrieval` pipeline (no corpus-dependent stages). Same 256 ms round trip:
+
+| stage (100k entities) | p50 total | ≈ server | p95 total |
+|---|---|---|---|
+| `$vectorSearch` alone (query embedded by Atlas) | 455 ms | ~200 ms | 479 ms |
+| entry `$rankFusion` (vector + lexical) | 500 ms | ~245 ms | 607 ms |
+| entry + `$lookup` + `$graphLookup` + `$group` | 816 ms | ~560 ms | 1,152 ms |
+
+Most of the server time is embedding the question and carrying the neighbours' fields through the pipeline, not finding them: the bare traversal above stays in single-digit milliseconds.
 
 **Two RAGs or one evolution?** One evolution. The graph engine runs the full hybrid search inside it (`$unionWith documents`) and adds the graph layer. Start with hybrid; add the graph when the questions are about relations. In MongoDB that does not mean another database.
 
