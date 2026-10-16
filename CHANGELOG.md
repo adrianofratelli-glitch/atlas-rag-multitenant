@@ -2,7 +2,19 @@
 
 ## Unreleased
 
-- Atualiza dependências compatíveis e pisos de segurança; alinha metadados de versão entre aplicação e frontend.
+## 1.4.0 (2026-10-16)
+
+Graph-RAG on the same database, as a layer over hybrid retrieval.
+
+- Updates compatible dependencies and security floors; aligns version metadata between the app and the frontend.
+- Graph-RAG tab over the same reference corpus and database. `build_graph.py` extracts typed entities and relations with Claude (through the gateway, cached per chunk text), resolves them by name, code and acronym, groups communities offline (Louvain) and writes `kg_entities` / `kg_communities` with `$jsonSchema` validation, `autoEmbed` vector indexes and an Atlas Search index. `graph_retrieval.py` answers in one aggregation: `$rankFusion` over entities, `$lookup` + `$graphLookup` (hubs not crossed), `$lookup` of cited chunks with `$rerank`, `$unionWith` direct hybrid chunks and community summaries. `/api/chat` takes `engine: "hybrid" | "graph"`; a graph failure falls back to hybrid retrieval.
+- UI: Graph-RAG tab with an animated traversal of the real subgraph (`GraphPanel`, `GraphTraversal`, `GraphModal` with declared limits) and a side-by-side mode against hybrid retrieval (`CompareView`).
+- `eval/graph_compare.py`: both engines on relational and local questions, blind LLM judge plus objective counts. `scripts/reset_demo.py` rebuilds the graph after re-ingestion (chunk `_id`s change).
+- Graph-RAG evaluation hardening: wide-hybrid control with the same context budget (`final_n` on `/api/chat`, eval only), extraction audit (`eval/graph_audit.py`), entity resolution pass with `$vectorSearch` over the entities plus an LLM decision on candidate pairs, diff writes by content hash, `scope` on every graph document and stage.
+- Upload graph: each upload gets its own graph at the end of ingestion (`scope: "uploads"`, TTL with its chunks, deleted with the document); the upload tab switches between hybrid and hybrid + graph per question.
+- `scripts/graph_scale_test.py`: traversal latency on a synthetic graph of 10k–1M entities in a throwaway `*_test` database (≈3 ms server-side at 100k, ≈21 ms at 1M with the hub cutoff).
+- Results on the reference corpus: graph beats hybrid retrieval with the same context budget on 5 of 6 relational questions and loses 3 of 4 single-passage facts; extraction audit 80% / 75% of sampled entities / relations fully supported, none unsupported. Details in the README.
+- Tests: `tests/test_graph_rag.py`, `frontend/tests/graphLayout.test.mjs`.
 
 ## 1.3.1 (2026-10-08)
 

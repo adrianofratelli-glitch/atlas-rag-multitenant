@@ -36,6 +36,93 @@ Total nesta versão: **9 aggregation pipelines / operações de leitura ou escri
 
 **Observação de `scoreDetails`:** o ramo em que o chunk não apareceu vem com `rank: "NA"` e `value: 0`; só `rank` inteiro conta como acerto daquele ramo.
 
+## Graph-RAG (aba Graph-RAG, `engine: "graph"`)
+
+**Onde:** `graph_retrieval.py::build_graph_pipeline`, chamado por `agent.py::_retrieve_graph`. Um único aggregation em `kg_entities`: acha as entidades de entrada, percorre o grafo, busca e reranqueia os trechos citados e traz os sumários de comunidade.
+
+```python
+db.kg_entities.aggregate([
+  # 1. entidades de entrada: busca vetorial (autoEmbed) + léxica (nome, sigla, código), fundidas
+  {"$rankFusion": {"input": {"pipelines": {
+      "vector":  [{"$vectorSearch": {"index": "kg_vector_index", "path": "text", "query": "<pergunta>",
+                   "model": "voyage-4", "numCandidates": 150, "limit": 10,
+                   "filter": {"client_id": "tenant-x"}}}],
+      "lexical": [{"$search": {"index": "kg_text_index", "compound": {
+                   "should": [{"text": {"query": "<pergunta>", "path": "name", "score": {"boost": {"value": 3}}}},
+                              {"text": {"query": "<pergunta>", "path": "aliases", "score": {"boost": {"value": 2}}}},
+                              {"text": {"query": "<pergunta>", "path": "description"}},
+                              {"text": {"query": "<pergunta>", "path": "name", "fuzzy": {"maxEdits": 1, "prefixLength": 2}}}],
+                   "minimumShouldMatch": 1,
+                   "filter": [{"equals": {"path": "client_id", "value": "tenant-x"}}]}}},
+                  {"$limit": 10}]}},
+    "scoreDetails": True}},
+  {"$limit": 6},
+  {"$set": {"seed_score": {"$meta": "score"}, "score_details": {"$meta": "scoreDetails"}}},
+  # 2. 1º salto: todos os vizinhos diretos (inclusive hubs), pelos dois sentidos (campo `links`)
+  {"$lookup": {"from": "kg_entities", "localField": "links", "foreignField": "_id", "as": "hop1",
+               "pipeline": [{"$match": {"client_id": "tenant-x"}}, {"$project": {...}}]}},
+  # 3. saltos seguintes: recursivo, partindo só dos vizinhos que não são hub
+  {"$graphLookup": {"from": "kg_entities",
+                    "startWith": "<links dos vizinhos com degree <= 40>",
+                    "connectFromField": "links", "connectToField": "_id", "as": "hop2",
+                    "maxDepth": 0, "depthField": "hop",
+                    "restrictSearchWithMatch": {"client_id": "tenant-x", "degree": {"$lte": 40}}}},
+  {"$project": {...,"neighbors": "<hop1 + hop2, ordenados por salto e grau, até 60 por entrada>"}},
+  {"$group": {"_id": None, "seeds": {"$push": "$$ROOT"}}},
+  # 4. trechos citados: das entidades de entrada, das arestas delas, dos vizinhos diretos (nessa prioridade)
+  {"$set": {"evidence_ids": "<até 60 _id de chunk>"}},
+  {"$lookup": {"from": "documents", "let": {"ids": "$evidence_ids"}, "as": "evidence", "pipeline": [
+      {"$match": {"$expr": {"$in": ["$_id", "$$ids"]}, "metadata.client_id": "tenant-x",
+                  "metadata.expires_at": {"$exists": False}}},          # só o corpus base
+      {"$match": {"text": {"$type": "string", "$ne": ""}}},
+      {"$rerank": {"model": "rerank-3", "query": {"text": "<pergunta>"}, "path": "text", "numDocsToRerank": 60}},
+      {"$set": {"rerank_score": {"$meta": "score"}}},
+      {"$limit": 8}]}},
+  {"$set": {"kind": "graph"}},
+  # 5. trechos diretos: o pipeline nativo da aba de referência (busca híbrida), limitado a 4
+  {"$unionWith": {"coll": "documents", "pipeline": [
+      {"$rankFusion": {...}}, {"$rerank": {...}}, {"$limit": 4}, {"$set": {"kind": "direct"}}]}},
+  # 6. perguntas globais: sumários de comunidade, na mesma ida ao banco
+  {"$unionWith": {"coll": "kg_communities", "pipeline": [
+      {"$vectorSearch": {"index": "kg_community_vector_index", "path": "text", "query": "<pergunta>",
+                         "model": "voyage-4", "numCandidates": 50, "limit": 2, "filter": {"client_id": "tenant-x"}}}]}},
+])
+```
+
+**Por que `$lookup` + `$graphLookup` e não só `$graphLookup`:** um objetivo estratégico citado por cem ações é um hub. O 1º salto precisa mostrá-lo (é informação), mas atravessá-lo levaria a quase o grafo inteiro em dois saltos. `$graphLookup` não tem "inclua, mas não expanda": o `$lookup` traz o 1º salto completo, e o `$graphLookup` parte só dos vizinhos que não são hub, com `restrictSearchWithMatch` barrando hubs. `GRAPH_HOPS=1` remove o `$graphLookup`.
+
+**Por que `links` e não `relations.target`:** as arestas ficam no nó de origem (`unidade --responsavel_por--> ação`). Percorrer `relations.target` só seguiria saídas, e uma ação nunca chegaria à unidade responsável. `links` guarda os vizinhos nos dois sentidos; `relations` guarda o tipo e a direção, para os fatos do prompt.
+
+**Por que os trechos diretos:** na primeira rodada do eval, o grafo puro perdeu as 4 perguntas factuais locais ("qual o prazo da ação X" virava "não encontrei"), porque só lia trechos citados pelo subgrafo. Os trechos diretos e os do grafo disputam as 8 vagas pelo score do mesmo `$rerank` (`graph_retrieval.merge_evidence`); cada fonte volta com a origem (`grafo`, `vetorial`, `léxico`).
+
+**Código na pergunta:** `query_codes` extrai códigos ("AG56", "ON 02") e o ramo léxico ganha `{"in": {"path": "code", ...}, "score": {"constant": {"value": 100}}}`. Com `boost` 5 o código perdia para o BM25 de termos genéricos do corpus.
+
+**Saída:** um documento `kind: "graph"` (entradas, vizinhos, `evidence` reranqueada, `evidence_candidates`) e até 2 documentos `kind: "community"`. `graph_retrieval.parse_graph_rows` monta nós (menor salto vence), arestas internas ao subgrafo, triplas para o prompt, a proveniência de cada trecho (`via`) e o recorte desenhado na UI (estratificado por salto, máximo 40 nós).
+
+**Falha:** exceção ou nenhuma entidade de entrada → `_retrieve_native` (busca híbrida) com `stats.graph_degraded = true`; a UI avisa que a resposta não veio do grafo.
+
+### Coleções e índices do grafo (`build_graph.py`)
+
+| Coleção / índice | Tipo | Definição |
+|---|---|---|
+| `kg_entities` | coleção com validação de schema (`$jsonSchema`, `strict`) | `{_id: "tipo:nome-normalizado", name, type, code, aliases, description, sources, chunk_ids, mentions, relations: [{target, type, description, chunk_ids, sources}], links, degree, community, client_id, text}` |
+| `kg_entities.kg_vector_index` | vectorSearch | `autoEmbed` em `text` (`voyage-4`) + filtros `client_id`, `scope`, `type`, `sources` |
+| `kg_entities.kg_text_index` | search | `name` (`lucene.portuguese` + `autocomplete`), `aliases`, `description` (`lucene.portuguese`), `code`/`client_id`/`scope`/`type`/`sources` (`token`) |
+| `kg_entities.client_scope_type`, `links`, `uploads_ttl`, `upload_source` | B-tree / TTL | `{client_id, scope, type}`; `{links: 1}` (travessia reversa); `expires_at` com `expireAfterSeconds: 0` (grafo de upload); `upload_source` esparso. `_id` já serve o `connectToField` |
+| `kg_communities` | coleção com validação de schema | `{_id: "community:N", title, summary, entity_ids, top_entities, size, sources, chunk_ids, client_id, text}` |
+| `kg_communities.kg_community_vector_index` | vectorSearch | `autoEmbed` em `text` + filtros `client_id`, `scope` |
+| `_meta.graph_build` | documento | data, modelo, contagens por tipo; lido por `/api/config` |
+
+**Escopo:** todo documento do grafo tem `scope` (`"base"` ou `"uploads"`), e todo estágio filtra por ele junto com `client_id`: `filter` do `$vectorSearch`, `equals` do `$search`, `$match` do `$lookup`, `restrictSearchWithMatch` do `$graphLookup`. No escopo `uploads` a evidência exige `metadata.expires_at` presente e `metadata.source` nos documentos marcados; não há comunidades.
+
+**Escritas (`sync_collection`):** por diferença. Cada documento ganha `hash` do conteúdo; o build lê `{_id, hash}` do escopo, regrava só o que mudou (`ReplaceOne` com `upsert`) e apaga o que sumiu (`DeleteOne`), em `bulk_write` de 500. Reconstruir inteiro fazia o autoEmbed reembedar todas as entidades e deixava a aba sem grafo entre o delete e o insert.
+
+**Passe de duplicatas (`find_duplicate_candidates` + `confirm_merges`):** para cada entidade, um `$vectorSearch` no próprio `kg_vector_index`, filtrado por tipo, devolve os vizinhos com score até 0,05 abaixo do score da própria entidade (piso 0,85; a entidade contra o próprio texto dá ~0,92, não 1,0). Soma-se um sinal léxico: sigla ou alias de uma entidade igual ao nome de outra ("Projudi/PJD" × alias "PJD"), ignorando partes com dígito (o "2021" de "Lei 14.133/2021" ligaria todas as normas do ano). Códigos diferentes nunca viram par. O LLM decide só esses pares, em lotes de 12, com resposta explícita por par; as fusões confirmadas reentram em `graph_extract.resolve(merges=...)`. Cache em `.graph_cache/merges.jsonl` e `confirmed_merges.json` (este invalida sozinho se o critério do prompt mudar).
+
+**Grafo de upload (`build_upload_graph`):** no fim do job de upload (fase `graph`), o mesmo pipeline sobre os chunks daquele `source`, com `scope: "uploads"`, `_id` prefixado `up:<source>:`, `upload_source` e o mesmo `expires_at` dos chunks; o índice TTL `kg_entities.uploads_ttl` varre os dois juntos. Remover o documento apaga o grafo dele; `scripts/reset_demo.py` apaga todos os grafos de upload. Passa pela guarda `assert_writable_db`. A extração usa cache local `.graph_cache/` (fora do git, cita o corpus), chaveado por modelo + prompt + texto do chunk: reconstruir depois de `scripts/reset_demo.py` (os chunks ganham `_id` novos) não chama o LLM, e o reset já reconstrói sozinho.
+
+**O que fica fora do banco, de propósito:** a extração (Claude pelo gateway), a resolução de entidades (`graph_extract.resolve`: nome normalizado, código, sigla) e a detecção de comunidades (Louvain, `networkx`). O MongoDB não tem algoritmo de grafo; o resultado desses passos é o que mora no Atlas.
+
 ## Índices
 
 ### 1. `vector_index` — Atlas Vector Search

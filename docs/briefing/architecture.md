@@ -87,6 +87,19 @@ As duas buscas rodam de fato em paralelo (`ThreadPoolExecutor`, uma thread para 
 | `scripts/reset_demo.py` | reset da demo num comando: índices, reingestão do corpus base (o Atlas regenera os embeddings via `autoEmbed`), remoção de uploads e fontes fora do corpus, limpeza de conversas e checkpoints, espera até uma consulta real devolver trechos. Mesma guarda de banco. |
 | `observability.py` | logging estruturado, request-id, `/api/metrics`, `/metrics` (Prometheus), `/api/health`. |
 
+## Graph-RAG no mesmo banco (aba Graph-RAG)
+
+Pergunta do cliente que motivou: "dá para fazer Graph-RAG no MongoDB?". A aba responde no mesmo banco, sem outro motor.
+
+**Evolução, não alternativa:** o motor graph roda a busca híbrida inteira dentro dele (`$unionWith documents`) e soma a camada do grafo. Comece pelo híbrido; ligue o grafo quando as perguntas forem sobre relações. O eval com controle de orçamento (híbrido largo com o mesmo tamanho de contexto) mostra o grafo vencendo as relacionais por estrutura e perdendo os fatos locais para mais trechos: os fatos do grafo viram ruído ali.
+
+- **Construção (offline, `build_graph.py`):** Claude extrai entidades (unidade, ação, objetivo, sistema, norma, indicador, risco) e relações tipadas de cada chunk do corpus base, sem pessoas. `graph_extract.resolve` funde menções (nome normalizado, código, sigla: "CES" e "Coordenadoria de Engenharia de Software" viram um nó; código de ação é por plano, código de objetivo é global). Louvain (`networkx`) agrupa comunidades, e Claude resume cada uma. Tudo vai para `kg_entities` e `kg_communities` no `DB_NAME`, ao lado de `documents`.
+- **Consulta (`graph_retrieval.py`):** um aggregation em `kg_entities`: `$rankFusion` (`$vectorSearch` autoEmbed + `$search` nome/sigla/código) acha 6 entidades de entrada; `$lookup` traz o 1º salto e `$graphLookup` o 2º, sem atravessar hubs; `$lookup` em `documents` com `$rerank` traz os 8 trechos citados pelo subgrafo; `$unionWith` traz 2 sumários de comunidade.
+- **Prompt:** entidades do subgrafo com os documentos onde aparecem, até 120 triplas (as das entradas primeiro), temas e os trechos. O modelo é instruído a mostrar a cadeia (A → B → C) e a citar páginas só dos trechos.
+- **Onde ganha:** enumeração ("quais ações a unidade X conduz": o grafo traz todas as arestas da unidade; o híbrido traz 8 trechos), cadeias (objetivo → ações → unidades), presença em vários documentos (`sources` da entidade) e perguntas globais (comunidades). **Onde não ganha:** fato local de um trecho só (prazo de uma ação, um número): o híbrido já acerta e é mais simples.
+- **Limites declarados (também na UI):** sem algoritmos de grafo no banco; `$graphLookup` segue um campo, sem peso de aresta; grafo extraído por LLM pode errar ou faltar; a profundidade fica em 2 saltos. Grafo só do corpus base (uploads expiram e não entram).
+- **Degradação:** falha do aggregation ou nenhuma entidade de entrada → busca híbrida nativa, com aviso.
+
 ## O turno como grafo (LangGraph), sem agente
 
 `rag_graph.py` organiza o turno em três nós: `retrieve` (chama `agent.retrieve_context`, decide se há evidência), `refuse` (recusa sem chamar o LLM, só com `RAG_REFUSE_WEAK_EVIDENCE=1` ou sem trecho nenhum) e `generate` (stream do Claude). Não há ferramentas nem laço de raciocínio: é um pipeline fixo, por isso não existe `agent-behavior.md`. O endpoint `/api/chat` é síncrono e roda o grafo numa thread, drenando uma fila para o SSE.

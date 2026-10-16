@@ -20,14 +20,15 @@ Regra de design: **a UI não decide nada de recuperação.** Ela só mostra o qu
 
 Em dev, o Vite faz proxy de `/api` → `:8180`. Em produção (Docker), o nginx faz esse mesmo papel, mesma origem, sem CORS.
 
-## Estrutura de telas — duas abas, sem router
+## Estrutura de telas — três abas, sem router
 
-Uma tela só (sem sidebar, sem roteamento), dividida em **duas abas que nunca se misturam**:
+Uma tela só (sem sidebar, sem roteamento), dividida em **três abas que nunca se misturam**:
 
-- **`Corpus de referência`** (`tab: 'base'`) — o documento do tenant, só leitura.
-- **`Novo conteúdo`** (`tab: 'uploads'`) — o que for enviado durante a demo.
+- **`Corpus de referência`** (`tab: 'base'`) — o documento do tenant, só leitura, busca híbrida.
+- **`Graph-RAG`** (`tab: 'graph'`) — o mesmo corpus base, recuperado pelo grafo de conhecimento (`engine: "graph"`). Dois modos: **Graph-RAG** (chat sobre o grafo) e **Lado a lado com o híbrido** (cada pergunta vai aos dois motores ao mesmo tempo, sem histórico, e a tela mostra as duas respostas e o que cada uma levou ao prompt). Sem o grafo construído (ou com `RAG_NATIVE=0`), a aba mostra o comando `build_graph.py`.
+- **`Novo conteúdo`** (`tab: 'uploads'`) — o que for enviado durante a demo. Uma chave **RAG híbrido / Híbrido + grafo do upload** escolhe o motor por pergunta, na mesma conversa. O grafo de cada upload é montado no fim da ingestão (fase `montando o grafo`, depois de os índices encontrarem o documento; dá para perguntar pela busca híbrida enquanto isso) e expira com o upload. O painel lateral segue o motor da última resposta.
 
-`App.jsx` monta **as duas** ao mesmo tempo (`hidden` no `role="tabpanel"` da inativa) — de propósito: trocar de aba não pode matar um stream em andamento nem apagar a conversa da outra aba. "Nova conversa" (`newChat()`) remonta só a aba ativa via mudança de `key` em `WorkspaceView`, zerando thread/histórico/documentos marcados daquela aba.
+`App.jsx` monta **as três** ao mesmo tempo (e a aba Graph-RAG monta os dois modos) (`hidden` no `role="tabpanel"` da inativa) — de propósito: trocar de aba não pode matar um stream em andamento nem apagar a conversa da outra aba. "Nova conversa" (`newChat()`) remonta só a aba ativa via mudança de `key` em `WorkspaceView`, zerando thread/histórico/documentos marcados daquela aba.
 
 ## Componentes
 
@@ -44,6 +45,12 @@ Uma tela só (sem sidebar, sem roteamento), dividida em **duas abas que nunca se
 | `ArchitectureModal` | `frontend/src/components/ArchitectureModal.jsx` | o desenho "uma pergunta, uma aggregation": aplicação → cluster Atlas (`$vectorSearch` e `$search` → `$rankFusion` → `$rerank` → `$limit`, com chunks, vetores, conversas e checkpoints no mesmo cluster) → Claude via gateway, e a lista do que não precisou existir. Abre pelo **ampliar** do painel lateral ou, em tela estreita, pelo link **ver arquitetura** (no `Welcome`, sem números; no `EngineStrip`, só no caminho nativo, com os números daquela pergunta: quantos dos chunks finais vieram de cada ramo e filtro de ACL). Fecha com `Esc`, clique fora ou `×`. Se o nativo degradou, mostra o aviso e esmaece os estágios que não rodaram |
 | `Sources` | `frontend/src/components/Sources.jsx` | os até 8 chunks que fundamentaram a resposta — cada um com badge `VETORIAL`/`LÉXICO` (de `matched_by`), badge `restrito` se aplicável, score `vetorial → rerank` (`—` no vetorial quando o chunk veio só da busca léxica) e preview do texto |
 | `DocumentsPanel` | `frontend/src/components/DocumentsPanel.jsx` | biblioteca de documentos daquela aba (`workspace = base | uploads`): drag-and-drop de upload com barra de progresso por chunk e fase `sincronizando índices` até o documento ser consultável (o job só vira `done` quando os dois índices o devolvem; em timeout fica o aviso de que ainda sincronizam), lista de documentos com checkbox para restringir a recuperação, tag `restrito`/`base`/tempo até expirar |
+| `GraphTab` | `frontend/src/components/GraphTab.jsx` | aba Graph-RAG: alterna os modos Graph-RAG e lado a lado (os dois montados) e mostra o aviso de grafo ausente |
+| `GraphWelcome` | `frontend/src/components/GraphWelcome.jsx` | estado vazio da aba: o que é o grafo, contagens (`/api/config` → `graph`), tipos de entidade e as perguntas relacionais (`graph_questions` do `client_config.json`) |
+| `GraphPanel` | `frontend/src/components/GraphPanel.jsx` | painel lateral da aba, mesma narrativa do `ArchitecturePanel` ("uma pergunta, um grafo, uma aggregation"), com `GraphTraversal` dentro do cluster e os números do turno (entradas, nós, relações, documentos). Botão **ampliar** abre o `GraphModal` |
+| `GraphTraversal` | `frontend/src/components/GraphTraversal.jsx` | animação em loop de 11 s com o subgrafo real do turno (`stats.graph`): entradas acendem no centro (`$rankFusion`), 1º salto no anel do meio (`$lookup`), 2º salto no anel de fora (`$graphLookup`), trechos saem dos nós para a barra `documents` (`$lookup`), só `final_n` ficam verdes (`$rerank`), temas aparecem (`$unionWith`). Cor por tipo de entidade; entradas com halo. Desenho é um recorte de até 40 nós estratificado por salto; as legendas usam os totais reais (`hop_counts`). Layout radial determinístico em `frontend/src/graphLayout.js`. Parado e apagado antes da primeira pergunta; com `prefers-reduced-motion`, parado no quadro do 2º salto. Só `transform`/`opacity` animam |
+| `GraphModal` | `frontend/src/components/GraphModal.jsx` | versão ampliada: travessia com rótulos, estágios com os números do turno e os **limites declarados** (sem algoritmos de grafo no banco, sem peso de aresta, grafo extraído por LLM, Preview) |
+| `CompareView` | `frontend/src/components/CompareView.jsx` | modo lado a lado: duas respostas por pergunta (híbrido à esquerda, graph à direita) e a tabela "o que foi ao prompt" (trechos, documentos nas fontes, entidades/relações, documentos alcançados, temas, trechos em comum). Sem latência na tela, como no resto da interface |
 | `OfflineHero` | `frontend/src/components/OfflineHero.jsx` | tela de fallback quando `/api/config` ou o Atlas não respondem, com botão "Reconectar" |
 
 Não há componentes legados: todo arquivo em `frontend/src/components/` é usado pelo shell atual.
@@ -93,6 +100,15 @@ O seletor `publico`/`restrito` do `TopBar` é **confiado do cliente** (não é a
 
 Antes de apresentar: `ALLOW_DEMO_DB_WRITE=1 python scripts/reset_demo.py <corpus>` rodado (cria o que faltar de índice, reingere o corpus, limpa uploads, conversas e checkpoints e só termina quando uma consulta real devolve trechos; cerca de 25 s com 701 chunks), `RAG_NATIVE=1` e `DB_NAME` apontando para a base nativa; uma pergunta de aquecimento fora da demo para pagar o cold start de embedding/geração; seletor de acesso começando em `publico` (para o passo 4 ter contraste).
 
+
+## Roteiro Graph-RAG (pergunta "dá para fazer Graph-RAG no MongoDB?")
+
+1. Aba **Graph-RAG**, modo **Lado a lado com o híbrido**.
+2. Clique na pergunta de enumeração (ações de uma unidade e os objetivos de cada uma). A resposta híbrida lista o que coube em 8 trechos; a do grafo percorre todas as arestas da unidade. Aponte a tabela "o que foi ao prompt".
+3. Pergunta de presença em vários documentos (sistemas nos dois planos): o grafo sabe em que documentos cada entidade aparece.
+4. No painel lateral, deixe o loop rodar: entradas → 1º salto → 2º salto sem atravessar hubs → trechos → `$rerank` → temas. Tudo em `kg_entities.aggregate()`.
+5. **ampliar** → leia os limites declarados antes que o cliente pergunte.
+6. Mostre uma pergunta factual local (prazo de uma ação): os dois acertam. Graph-RAG é para relações, não substitui a busca.
 
 ## Roteiro curto para mostrar o MongoDB 9
 

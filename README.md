@@ -147,6 +147,59 @@ Same golden set, same 303 chunks, k=15, 38 answerable questions:
 
 The embedding upgrade is the clearest gain (+8 points of recall@1 without rerank). With rerank the difference is one question out of 38, which is within noise, and `rerank-3` ties `rerank-2.5` on this set. With two more documents indexed as distractors (701 chunks) recall@1 is 0.789 and recall@8 stays at 1.000. The lexical branch helps before the rerank (+2.6 points of recall@1) and ties the vector branch after it.
 
+## Graph-RAG on the same database
+
+A third tab answers "can MongoDB do Graph-RAG?" over the same reference corpus and the same database. Only retrieval changes.
+
+**Build (offline, `build_graph.py`).** Claude, through the gateway, extracts typed entities (unit, action, objective, system, norm, indicator, risk; never people) and typed relations from every chunk. `graph_extract.resolve` merges mentions by normalized name, code and acronym. Louvain (`networkx`) groups communities and Claude summarizes each one. The result lives in `kg_entities` (one document per entity, edges embedded as an adjacency list, `$jsonSchema`-validated) and `kg_communities`, next to `documents`, with `autoEmbed` vector indexes and an Atlas Search index on names and acronyms.
+
+```bash
+ALLOW_DEMO_DB_WRITE=1 python build_graph.py   # cached per chunk text: a rebuild makes no LLM calls
+```
+
+**Query (`graph_retrieval.py`).** One aggregation on `kg_entities`:
+
+```
+$rankFusion { $vectorSearch (autoEmbed) + $search (name, acronym, code) }   entry entities
+  -> $lookup (1st hop, both directions) -> $graphLookup (2nd hop, hubs not crossed)
+  -> $group -> $lookup documents { cited chunks -> $rerank -> $limit 8 }
+  -> $unionWith documents { $rankFusion + $rerank, 4 direct chunks }
+  -> $unionWith kg_communities { $vectorSearch }                            corpus-wide themes
+```
+
+Chunks cited by the subgraph and a few chunks from a plain hybrid search compete for the 8 final slots on the same `$rerank` score: graph-only evidence lost every single-passage factual question in the first eval run. Codes in the question ("AG56") are matched exactly against the entity `code` field. The prompt gets the traversed entities (with the documents each one appears in), up to 120 typed relations, the community summaries and the reranked chunks. Only chunks are cited as sources. If the aggregation fails, the turn falls back to hybrid retrieval and the UI says so.
+
+**In the UI**, the side panel animates the real traversed subgraph of each question: entry points, first hop, second hop, cited chunks, rerank, themes. *Side by side* mode sends every question to both engines and shows what each one put in the prompt.
+
+**Where it helps and where it does not.** The graph wins on enumeration ("every action a unit owns, and the objective of each": the graph has all of the unit's edges, hybrid retrieval has 8 chunks), on chains (objective -> actions -> units), on "which documents mention X" and on corpus-wide questions. On a local fact from a single passage, hybrid retrieval is already right and simpler. `eval/graph_compare.py` sends each question through `/api/chat` to three setups: hybrid (8 chunks), **wide hybrid** (as many chunks as needed to match the graph's prompt size, capped at 32) and graph. A blind LLM judge (random A/B order) compares the graph with each. The wide hybrid is the control for "did the graph win only because it sent more context?". Six relational and four local questions:
+
+| | graph × hybrid 8 (win/loss/tie) | graph × wide hybrid | completeness 1–5 (hybrid 8 / wide / graph) | codes cited (8 / wide / graph) |
+|---|---|---|---|---|
+| relational (6) | 6 / 0 / 0 | 5 / 1 / 0 | 2.83 / 3.17 / 4.17 | 8.5 / 10.3 / 18.2 |
+| local facts (4) | 1 / 2 / 1 | 0 / 3 / 1 | 4.25 / 4.50 / 4.00 | — |
+
+With the same context budget (~23k vs ~30k characters) the graph still wins the relational questions, so the gain comes from structure, not volume. On local facts more chunks beat the graph: its extra facts are noise there. Retrieval is ~0.8 s (hybrid), ~1.2 s (wide), ~2.1 s (graph). The questions are ours, there is no human gold label and the judge is the model that generates: a signal, not a benchmark.
+
+**Extraction audit (`eval/graph_audit.py`).** 40 entities and 40 relations sampled and checked against the chunk they came from: entities 80% supported, 20% partial, 0% unsupported (type right 95%); relations 75% supported, 25% partial (type or direction off), 0% unsupported. Same judge caveat, so this is an optimistic ceiling; the sample is kept for human review.
+
+**Entity resolution in the database.** After the first write, each entity runs a `$vectorSearch` against its own index (same type, within 0.05 of its self-score) plus an acronym/alias match; Claude decides only those pairs, and confirmed merges ("Projudi/PJD" = "Processo Judicial Digital") go back into resolution. On the reference corpus: 98 candidate pairs, 37 merges (599 → 567 entities). Writes are diffs by content hash, so a new document only rewrites the entities it touches.
+
+**Uploads get their own graph.** At the end of each upload the same pipeline builds a graph for that document (`scope: "uploads"`, same `expires_at` as its chunks, swept by a TTL index). The upload tab can answer each question with hybrid retrieval or hybrid + that graph.
+
+**Traversal at scale (`scripts/graph_scale_test.py`).** Synthetic Barabási–Albert graph (hubs like the real one) in a throwaway `*_test` database, 6 random entry points per query, same `$lookup` + `$graphLookup` stages and hub cutoff, 30 runs. Measured from a laptop with a 256 ms round trip to the cluster; the column after the arrow subtracts it:
+
+| entities | size | largest degree | p50 / p95 total | ≈ server p50 | nodes reached (p50) | without hub cutoff: p50 / max, nodes |
+|---|---|---|---|---|---|---|
+| 10k | 5 MB | 272 | 259 / 280 ms | ~3 ms | 247 | 261 / 297 ms, 527 |
+| 100k | 52 MB | 887 | 259 / 332 ms | ~3 ms | 261 | 275 / 313 ms, 933 |
+| 1M | 530 MB | 2,808 | 277 / 302 ms | ~21 ms | 264 | 312 / 595 ms, 721 (max 3,230) |
+
+Traversal cost stays flat because the hub cutoff bounds the neighbourhood (~260 nodes at any size); without it the neighbourhood and the tail latency grow with the hubs. Entry search (`$vectorSearch`) is not part of this test: embedding a million synthetic entities would cost money and measure nothing about the graph.
+
+**Two RAGs or one evolution?** One evolution. The graph engine runs the full hybrid search inside it (`$unionWith documents`) and adds the graph layer. Start with hybrid; add the graph when the questions are about relations. In MongoDB that does not mean another database.
+
+**Declared limits.** MongoDB is not a graph database. There is no PageRank, shortest path or community detection in the server (Louvain runs offline and only its output is stored), `$graphLookup` follows one field without edge weights, and depth stays at two hops. The graph is LLM-extracted, so entities can be missing or duplicated. Graph-RAG local search needs an entity neighbourhood of one or two hops, and that fits.
+
 ## Quality and governance
 
 Measured against a golden set of 48 questions: 38 answerable from the document, 5 with no answer in it, and 5 attempts to reach another tenant. The golden set is rebuilt by `eval/build_golden.py` from `eval/questions.json` (kept out of git, like `data/`, since it quotes the real document) and the corpus; `eval/questions.example.json` shows the format. Each question falls into a `calib` or `test` split: the refusal floor is **chosen on `calib`** and the numbers below are measured on `test`.
