@@ -449,6 +449,14 @@ def _save_merges(pairs) -> None:
                                          ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def merge_vetoes() -> list[tuple[str, str]]:
+    """Pares que nunca se fundem, revisados por humano: `graph_merge_vetoes` no client_config.json
+    (fora do git: cita nomes do corpus)."""
+    from config import _cfg
+
+    return [tuple(p) for p in _cfg.get("graph_merge_vetoes", []) if isinstance(p, list) and len(p) == 2]
+
+
 def build_base(db, refresh: bool = False, dedupe: bool = True) -> dict:
     chunks = load_chunks(db)
     if not chunks:
@@ -458,7 +466,7 @@ def build_base(db, refresh: bool = False, dedupe: bool = True) -> dict:
     merges = [] if refresh else _load_merges()
 
     def assemble(pairs):
-        ents = gx.drop_isolated_noise(gx.resolve(extractions, CLIENT_ID, pairs))
+        ents = gx.drop_isolated_noise(gx.resolve(extractions, CLIENT_ID, pairs, vetoes=merge_vetoes()))
         groups = gx.assign_communities(ents)
         log(f"resolução: {len(ents)} entidades, {sum(len(e['relations']) for e in ents)} relações, "
             f"{len(groups)} comunidades, {len(pairs)} fusões confirmadas")

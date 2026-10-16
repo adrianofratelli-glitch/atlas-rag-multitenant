@@ -155,6 +155,17 @@ class TestResolve(unittest.TestCase):
         self.assertEqual(sistemas[0]["sources"], ["D", "E"])
         self.assertEqual(sistemas[0]["degree"], 2)  # as duas ações agora chegam ao mesmo sistema
 
+    def test_veto_blocks_direct_and_transitive_merge(self):
+        ex = [{"chunk_id": f"c{i}", "source": "D", "entities": [_mention(n, "norma"), _mention(f"Ação {i}", "acao")],
+               "relations": [_rel(f"Ação {i}", n, "regulado_por")]}
+              for i, n in enumerate(["Estratégia A", "Estratégia B", "Estratégia C"])]
+        norms = lambda g: sorted(e["name"] for e in g if e["type"] == "norma")  # noqa: E731
+        merged = gx.resolve(ex, CLIENT_ID, [("Estratégia A", "Estratégia C"), ("Estratégia C", "Estratégia B")])
+        self.assertEqual(len(norms(merged)), 1)
+        vetoed = gx.resolve(ex, CLIENT_ID, [("Estratégia A", "Estratégia C"), ("Estratégia C", "Estratégia B")],
+                            vetoes=[("Estratégia A", "Estratégia B")])
+        self.assertEqual(len(norms(vetoed)), 2)  # A = C entra, C = B juntaria A e B: barrado
+
     def test_upload_scope_and_prefix(self):
         g = gx.resolve([{"chunk_id": "c", "source": "UP", "entities": [_mention("Unidade A", "unidade")],
                          "relations": []}], CLIENT_ID, scope="uploads", id_prefix="up:UP:")

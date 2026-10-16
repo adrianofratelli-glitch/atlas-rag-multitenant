@@ -78,7 +78,9 @@ def _get_llm() -> ChatAnthropic:
         default_headers=gw["headers"],
         timeout=float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "45")),
         max_retries=int(os.getenv("ANTHROPIC_MAX_RETRIES", "2")),
-        max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS", "1500")),
+        # 3000: enumerações (todas as ações de uma unidade) eram cortadas no meio da tabela com
+        # 1500. Teto igual para os dois motores, ou o lado a lado deixaria um escrever o dobro.
+        max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS", "3000")),
     )
 
 # Resilience is on by default; the variables only tune or switch it off:
@@ -94,7 +96,7 @@ REFUSAL_MESSAGE = (
     "Reformule citando o tema, a seção ou o número da ação que você procura."
 )
 
-app = FastAPI(title="RAG · MongoDB Atlas Vector Search (POC)", version="1.4.0")
+app = FastAPI(title="RAG · MongoDB Atlas Vector Search (POC)", version="1.4.1")
 
 
 @app.on_event("startup")

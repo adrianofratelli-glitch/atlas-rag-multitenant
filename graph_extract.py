@@ -205,7 +205,8 @@ def slug(etype: str, name: str) -> str:
 
 
 def resolve(extractions: list[dict], client_id: str, merges: list[tuple[str, str]] | None = None,
-            *, scope: str = "base", id_prefix: str = "") -> list[dict]:
+            *, scope: str = "base", id_prefix: str = "",
+            vetoes: list[tuple[str, str]] | None = None) -> list[dict]:
     """Funde as menções de todos os trechos em entidades e arestas.
 
     `extractions` = [{"chunk_id": ObjectId|str, "source": str, "entities": [...], "relations": [...]}].
@@ -219,6 +220,8 @@ def resolve(extractions: list[dict], client_id: str, merges: list[tuple[str, str
          (`build_graph.find_duplicates`): "Projudi/PJD" e "Processo Judicial Digital".
     Tipo final = o mais votado entre as menções. Determinístico: mesma entrada, mesmo grafo.
     `scope`/`id_prefix` separam o grafo do corpus base do grafo de um upload.
+    `vetoes`: pares de nomes que nunca podem terminar na mesma entidade, nem por transitividade
+    (A = C e C = B juntariam A e B): uma fusão confirmada que violaria um veto é ignorada.
     """
     uf = _UnionFind()
     mentions = []  # (key, mention, chunk_id, source)
@@ -242,9 +245,21 @@ def resolve(extractions: list[dict], client_id: str, merges: list[tuple[str, str
         # "CES" como nome de outra menção (o trecho só citou a sigla)
         for k in by_name.get(_key_words(normalize(sigla)), ()):
             uf.union(keys[0], k)
+    veto_keys = [(by_name.get(_key_words(normalize(x)), set()), by_name.get(_key_words(normalize(y)), set()))
+                 for x, y in vetoes or ()]
+
+    def violates(ka, kb):
+        ra, rb = {uf.find(k) for k in ka}, {uf.find(k) for k in kb}
+        joined = ra | rb
+        for vx, vy in veto_keys:
+            rx, ry = {uf.find(k) for k in vx}, {uf.find(k) for k in vy}
+            if rx and ry and (rx & joined) and (ry & joined) and ((rx & ra and ry & rb) or (rx & rb and ry & ra)):
+                return True
+        return False
+
     for a, b in merges or ():
         ka, kb = by_name.get(_key_words(normalize(a))), by_name.get(_key_words(normalize(b)))
-        if ka and kb:
+        if ka and kb and not violates(ka, kb):
             first = sorted(ka)[0]
             for k in sorted(ka | kb):
                 uf.union(first, k)

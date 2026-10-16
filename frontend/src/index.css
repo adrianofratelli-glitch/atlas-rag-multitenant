@@ -607,3 +607,5 @@ body::after {
 .gt-seeds { margin: 0; padding-left: 20px; font-size: 11.5px; color: var(--text); columns: 2; column-gap: 18px; max-width: 420px; }
 .gt-seeds li { break-inside: avoid; margin-bottom: 2px; }
 .gt-seeds i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.cmp-side .md { overflow-x: auto; }
+.cmp-side .md table { min-width: 100%; }
