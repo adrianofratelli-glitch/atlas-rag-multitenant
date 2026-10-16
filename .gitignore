@@ -54,3 +54,11 @@ eval/reports/retrieval_cache_*.json
 eval/reports/retrieval_results_*.json
 eval/reports/retrieval_legacy_*.md
 eval/reports/retrieval_native_*.md
+
+# Grafo de conhecimento: cache de extração cita o corpus
+.graph_cache/
+eval/graph_compare_questions.json
+eval/reports/graph_compare.md
+eval/reports/graph_compare.jsonl
+eval/reports/graph_audit.md
+eval/reports/graph_audit.jsonl

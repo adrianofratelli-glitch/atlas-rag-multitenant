@@ -49,6 +49,7 @@ from config import (
     QUESTIONS,
     FOLLOWUPS,
     DEFAULT_FOLLOWUPS,
+    GRAPH_QUESTIONS,
     SYSTEM_PROMPT_EXTRA,
 )
 from agent import INJECTION_FILTER, MODEL
@@ -93,7 +94,7 @@ REFUSAL_MESSAGE = (
     "Reformule citando o tema, a seção ou o número da ação que você procura."
 )
 
-app = FastAPI(title="RAG · MongoDB Atlas Vector Search (POC)", version="1.3.1")
+app = FastAPI(title="RAG · MongoDB Atlas Vector Search (POC)", version="1.4.0")
 
 
 @app.on_event("startup")
@@ -306,6 +307,41 @@ Finalize com: **Fontes:** [páginas consultadas]
 
 SYSTEM_PROMPT = SYSTEM_PROMPT_STATIC + "\n\nCONTEXTO:\n{context}"
 
+# Acrescentado às instruções no motor Graph-RAG: o contexto traz relações do grafo além dos
+# trechos, e a resposta deve explicitar a cadeia que ligou os fatos.
+GRAPH_PROMPT_EXTRA = """
+GRAFO DE CONHECIMENTO:
+O CONTEXTO traz, além dos trechos, entidades e relações de um grafo extraído dos mesmos
+documentos. Use as relações para conectar fatos espalhados (unidade -> ação -> objetivo,
+o mesmo sistema em documentos diferentes) e, quando a resposta depender dessa ligação,
+mostre a cadeia (A -> B -> C). Relação do grafo sem trecho que a confirme deve ser
+apresentada como indicação do grafo, não como fato citado. Cite páginas só dos TRECHOS."""
+
+_graph_status_lock = threading.Lock()
+_graph_status_cache = {"ts": 0.0, "value": None}
+
+
+def get_graph_status(force: bool = False) -> dict:
+    """Metadados do último build_graph.py (`_meta.graph_build`), com cache curto."""
+    with _graph_status_lock:
+        now = time.time()
+        if not force and _graph_status_cache["value"] is not None and now - _graph_status_cache["ts"] < 30:
+            return _graph_status_cache["value"]
+        try:
+            doc = get_client()[DB_NAME]["_meta"].find_one({"_id": "graph_build", "client_id": CLIENT_ID})
+        except Exception:
+            logger.exception("graph status lookup failed")
+            doc = None
+        value = {"ready": False} if not doc else {
+            "ready": doc.get("entities", 0) > 0,
+            "entities": doc.get("entities", 0), "relations": doc.get("relations", 0),
+            "communities": doc.get("communities", 0), "chunks": doc.get("chunks", 0),
+            "types": doc.get("types", {}),
+            "built_at": documents.iso_utc(doc.get("built_at")) if doc.get("built_at") else None,
+        }
+        _graph_status_cache.update(ts=now, value=value)
+        return value
+
 # Document outline (TOC) appended to the cached system block. Anthropic only
 # caches prefixes >= 1024 tokens; the instructions alone (~120 tokens) never
 # reach that, so the cache_control marker would be a no-op. The outline —
@@ -483,6 +519,8 @@ def api_config():
         "max_upload_mb": documents.MAX_UPLOAD_BYTES // (1024 * 1024),
         "upload_ttl_hours": documents.UPLOAD_TTL_HOURS,
         "supported_formats": sorted(documents.SUPPORTED_FORMATS),
+        "graph": get_graph_status() if NATIVE_ENABLED else {"ready": False},
+        "graph_questions": [_clean(q) for q in GRAPH_QUESTIONS[:8]],
     }
 
 
@@ -510,6 +548,13 @@ class ChatBody(BaseModel):
     # corpus, "uploads" = content sent through the UI, "all" = no scoping.
     # Resolved server-side so an empty `sources` can never leak the other tab.
     scope: Literal["all", "base", "uploads"] = "all"
+    # Motor de recuperação. "graph" percorre o grafo de conhecimento (kg_entities) do espaço:
+    # o do corpus base (build_graph.py; `sources` ignorado, o grafo é do corpus inteiro) ou os
+    # dos uploads (montados no fim de cada upload; `sources` restringe como na busca híbrida).
+    engine: Literal["hybrid", "graph"] = "hybrid"
+    # Trechos finais no prompt (padrão 8). Existe para o eval comparar os motores com o mesmo
+    # orçamento de contexto; a UI não envia. Teto baixo: cada trecho a mais é token pago.
+    final_n: int | None = Field(default=None, ge=1, le=32)
 
     @model_validator(mode="after")
     def bound_history_size(self):
@@ -611,6 +656,11 @@ def api_chat(body: ChatBody):
             status_code=422,
             detail=f"question exceeds {MAX_QUESTION_LENGTH} characters",
         )
+    graph_engine = body.engine == "graph"
+    if graph_engine and not NATIVE_ENABLED:
+        raise HTTPException(status_code=422, detail="o motor Graph-RAG exige RAG_NATIVE=1")
+    if graph_engine and body.scope != "uploads":
+        body = body.model_copy(update={"scope": "base", "sources": []})
     try:
         workspace_sources = documents.sources_for_scope(body.scope)
     except Exception:
@@ -671,7 +721,8 @@ def api_chat(body: ChatBody):
             named = effective_sources if (body.sources or body.scope == "uploads") else None
             scope_title = ", ".join(named) if named else DOCUMENT_TITLE
             static_instructions = SYSTEM_PROMPT_STATIC.format(
-                document_title=scope_title, client_name=CLIENT_NAME, extra=SYSTEM_PROMPT_EXTRA,
+                document_title=scope_title, client_name=CLIENT_NAME,
+                extra=SYSTEM_PROMPT_EXTRA + (GRAPH_PROMPT_EXTRA if graph_engine else ""),
             )
             outline = _get_document_outline(_levels_for(body.access_level), effective_sources)
             if outline:
@@ -703,6 +754,8 @@ def api_chat(body: ChatBody):
                         refusal_message=REFUSAL_MESSAGE, followups=_get_followups(question),
                         metrics=observability.metrics, track_usage=_track_usage, emit=_emit,
                         thread_id=str(body.thread_id) if body.thread_id else None,
+                        engine=body.engine, final_n=body.final_n,
+                        graph_scope="uploads" if body.scope == "uploads" else "base",
                     )
                     event_queue.put(("_final", final_state))
                 except Exception as exc:  # noqa: BLE001 — repassa pro consumidor, não derruba a thread

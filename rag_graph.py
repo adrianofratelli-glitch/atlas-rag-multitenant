@@ -52,8 +52,18 @@ def _ctx(config):
 def n_retrieve(state: ChatState, config) -> dict:
     ctx = _ctx(config)
     t0 = time.perf_counter()
+    final_n = ctx.get("final_n") or 8
+    kwargs = {"engine": ctx.get("engine", "hybrid")}
+    if kwargs["engine"] == "graph":
+        kwargs["graph_scope"] = ctx.get("graph_scope") or "base"
+    if final_n != 8:
+        # Orçamento maior de trechos (controle do eval): cada ramo precisa trazer mais candidatos.
+        kwargs.update(final_n=final_n, top_k=max(15, final_n + 6))
     context, sources, stats = retrieve_context(
-        state["question"], access_levels=ctx["access_levels"], sources=state.get("sources"))
+        state["question"], access_levels=ctx["access_levels"], sources=state.get("sources"), **kwargs)
+    if stats:
+        # Tamanho do que vai ao prompt: é o que o eval iguala entre os motores.
+        stats = {**stats, "context_chars": len(context)}
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     refused = insufficient_evidence(sources, stats)
     if refused:
@@ -181,7 +191,8 @@ def get_graph():
 
 def run_turn(*, question, access_levels, sources, history, static_instructions, llm, client_id,
              model_name, max_attempts, stream_deadline_s, refusal_message, followups, metrics,
-             track_usage, emit, thread_id) -> ChatState:
+             track_usage, emit, thread_id, engine="hybrid", final_n=None,
+             graph_scope="base") -> ChatState:
     """Roda retrieve -> (refuse | generate) e devolve o estado final (`full_response`,
     `stats`, `source_cards`, `elapsed_ms`, `timed_out`, `chunk_agg`, `ttft_ms`)."""
     graph = get_graph()
@@ -192,5 +203,6 @@ def run_turn(*, question, access_levels, sources, history, static_instructions, 
         "max_attempts": max_attempts, "stream_deadline_s": stream_deadline_s,
         "refusal_message": refusal_message, "followups": followups, "metrics": metrics,
         "track_usage": track_usage, "emit": emit, "thread_id": resolve_thread_id(thread_id),
+        "engine": engine, "final_n": final_n, "graph_scope": graph_scope,
     }}
     return graph.invoke(initial, config=config)

@@ -10,6 +10,7 @@ from resilience import retry_call
 from config import (CLIENT_ID, DB_NAME, NATIVE_ENABLED, NATIVE_EMBED_MODEL, NATIVE_RERANK_CANDIDATES,
                     NATIVE_RERANK_MODEL)
 import native_retrieval
+import graph_retrieval
 from db import get_client
 from dotenv import load_dotenv
 
@@ -151,7 +152,8 @@ def retrieve_context(query: str, top_k: int = 15,
                      access_levels: list | None = None,
                      sources: list | None = None,
                      *, use_lexical: bool = True, use_rerank: bool = True,
-                     final_n: int = 8, _capture: list | None = None) -> tuple[str, list[dict], dict]:
+                     final_n: int = 8, _capture: list | None = None,
+                     engine: str = "hybrid", graph_scope: str = "base") -> tuple[str, list[dict], dict]:
     """Hybrid search: vector ∪ lexical retrieval -> RRF -> rerank-2, with an ACL filter.
 
     access_levels: allowed access levels (e.g. ["publico"]). None means full access.
@@ -171,6 +173,11 @@ def retrieve_context(query: str, top_k: int = 15,
         return "Responda com base no histórico da conversa.", [], {}
 
     levels = access_levels if access_levels else ALL_ACCESS
+    if engine == "graph":
+        with telemetry.span("rag.retrieve.graph", client_id=CLIENT_ID, final_n=final_n) as root:
+            result = _retrieve_graph(query, levels, sources, final_n, top_k, _capture, graph_scope)
+            telemetry.annotate(root, hits=len(result[1]), degraded=result[2].get("graph_degraded"))
+            return result
     with telemetry.span("rag.retrieve", client_id=CLIENT_ID, k=top_k, final_n=final_n,
                         use_lexical=use_lexical, use_rerank=use_rerank) as root:
         result = _retrieve(query, top_k, levels, sources, use_lexical, use_rerank, final_n, _capture)
@@ -228,6 +235,7 @@ def _retrieve_native(query, top_k, levels, sources, use_lexical, use_rerank, fin
             "injection_dropped": injection_dropped}
     parts, out_sources = _format_results(top_results)
     stats = {
+        "engine": "hybrid",
         "native": True,
         "native_degraded": info["degraded"],
         "rerank_degraded": info["degraded"],  # score não comparável: insufficient_evidence não recusa por ele
@@ -256,6 +264,99 @@ def _retrieve_native(query, top_k, levels, sources, use_lexical, use_rerank, fin
         }],
     }
     return "\n\n---\n\n".join(parts), out_sources, stats
+
+
+def _retrieve_graph(query, levels, sources, final_n, top_k, _capture, scope="base"):
+    """Graph-RAG: entidades -> vizinhança -> trechos citados, num aggregation em `kg_entities`.
+
+    `scope` "base": grafo do corpus de referência (build_graph.py); "uploads": grafos dos
+    documentos enviados pela UI (montados no fim de cada upload). Se o aggregation
+    falhar (grafo ausente, índice fora), cai para a recuperação híbrida nativa e marca
+    `graph_degraded`: o turno responde, e a UI diz que não foi pelo grafo.
+    """
+    db = get_client()[DB_NAME]
+    try:
+        with telemetry.span("rag.graph.aggregate", client_id=CLIENT_ID) as sp:
+            parsed, pipeline = graph_retrieval.run_graph(db, query, final_n=final_n,
+                                                         access_levels=levels, sources=sources, scope=scope)
+            telemetry.annotate(sp, seeds=len(parsed["seeds"]), nodes=len(parsed["nodes"]),
+                               evidence=len(parsed["evidence"]))
+    except Exception:
+        logger.exception("graph pipeline failed — falling back to hybrid retrieval")
+        parsed, pipeline = None, None
+    if not parsed or not parsed["seeds"]:
+        context, out_sources, stats = _retrieve_native(
+            query, top_k, levels, sources, True, True, final_n, _capture)
+        return context, out_sources, {**stats, "engine": "graph", "graph_degraded": True}
+
+    via = graph_retrieval.chunk_provenance(parsed)
+    evidence = graph_retrieval.merge_evidence(parsed, final_n)
+    chunks = [{
+        "chunk_id": str(r["_id"]), "text": r["text"], "metadata": r["metadata"],
+        "vector_score": round(float(native_retrieval.pipeline_value(r.get("score_details"), "vector") or 0), 4),
+        "rerank_score": round(float(r.get("rerank_score") or 0), 4),
+        "matched_by": r["origin"],
+    } for r in evidence if isinstance(r.get("text"), str) and isinstance(r.get("metadata"), dict)]
+    injection_dropped = 0
+    if INJECTION_FILTER:
+        chunks, injection_dropped = _drop_injected(chunks)
+    if _capture is not None:
+        _capture.extend(chunks)
+    parts, out_sources = _format_results(chunks)
+    for card, chunk in zip(out_sources, chunks):
+        card["via"] = via.get(chunk["chunk_id"], [])[:4]
+
+    entity_lines, fact_lines = graph_retrieval.graph_facts(parsed)
+    blocks = []
+    if entity_lines:
+        blocks.append("ENTIDADES DO SUBGRAFO PERCORRIDO (grafo de conhecimento; ENTRADA = achada pela "
+                      "busca, salto = alcançada pela travessia):\n" + "\n".join(entity_lines))
+    if fact_lines:
+        blocks.append("RELAÇÕES DO GRAFO (extraídas dos documentos; use para conectar os fatos, "
+                      "mas cite as páginas dos TRECHOS):\n" + "\n".join(fact_lines))
+    if parsed["communities"]:
+        blocks.append("TEMAS DO CORPUS (sumários de comunidades do grafo):\n" + "\n".join(
+            f"- {c['title']}: {c['summary']}" for c in parsed["communities"]))
+    if parts:
+        blocks.append("TRECHOS DOS DOCUMENTOS:\n" + "\n\n---\n\n".join(parts))
+    graph_view = graph_retrieval.draw_view(parsed)
+    stats = {
+        "engine": "graph",
+        "graph_scope": scope,
+        "native": True,
+        "graph_degraded": False,
+        "rerank_degraded": False,
+        "seeds": len(parsed["seeds"]),
+        "seed_branch_k": graph_retrieval.SEED_BRANCH_K,
+        "hops": graph_retrieval.HOPS,
+        "hub_degree": graph_retrieval.HUB_DEGREE,
+        "graph_nodes": len(parsed["nodes"]),
+        "graph_edges": len(parsed["edges"]),
+        "facts": len(fact_lines),
+        "evidence_candidates": parsed["evidence_candidates"],
+        "direct_candidates": len(parsed.get("direct", [])),
+        "from_graph": sum(1 for c in chunks if "grafo" in c["matched_by"]),
+        # só os que o grafo não trouxe: somado a from_graph dá o total final
+        "from_direct": sum(1 for c in chunks if "grafo" not in c["matched_by"]),
+        "final_n": final_n,
+        "reranked": len(chunks),
+        "communities": [{"title": c["title"], "size": c["size"]} for c in parsed["communities"]],
+        "documents_covered": sorted({s for n in parsed["nodes"] for s in (n.get("sources") or [])}),
+        "graph": graph_view,
+        "injection_dropped": injection_dropped,
+        "embed_model": NATIVE_EMBED_MODEL,
+        "rerank_model": NATIVE_RERANK_MODEL,
+        "access_levels": levels,
+        "sources": [],
+        "query_details": [{
+            "operation": "aggregate / $rankFusion + $lookup + $graphLookup + $lookup($rerank) + $unionWith",
+            "namespace": f"{DB_NAME}.kg_entities",
+            "pipeline": pipeline,
+        }],
+    }
+    if not chunks and not fact_lines:
+        return "Nenhum contexto encontrado.", [], {**stats, "mode": "no_context"}
+    return "\n\n".join(blocks), out_sources, stats
 
 
 def _retrieve(query, top_k, levels, sources, use_lexical, use_rerank, final_n, _capture):

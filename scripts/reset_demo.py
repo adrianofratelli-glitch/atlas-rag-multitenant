@@ -89,6 +89,8 @@ def main() -> int:
     parser.add_argument("--keep-conversations", action="store_true",
                         help="não apaga conversas nem checkpoints do LangGraph")
     parser.add_argument("--dry-run", action="store_true", help="mostra o plano e não grava nada")
+    parser.add_argument("--skip-graph", action="store_true",
+                        help="não reconstrói o grafo do Graph-RAG (kg_entities) depois da reingestão")
     parser.add_argument("--wait-s", type=float, default=300, help="espera máxima pelos índices (0 = não espera)")
     args = parser.parse_args()
 
@@ -123,6 +125,8 @@ def main() -> int:
         print(f"  {result['source']}: {result['chunks']} chunks")
 
     uploads = docs.delete_many({"metadata.expires_at": {"$exists": True}}).deleted_count
+    if "kg_entities" in client[DB_NAME].list_collection_names():
+        client[DB_NAME]["kg_entities"].delete_many({"scope": "uploads"})  # grafos dos uploads apagados
     strays = docs.delete_many({"metadata.source": {"$nin": sorted(keep)}}).deleted_count
     print(f"removidos: {uploads} chunks de upload, {strays} chunks de fontes fora do corpus")
 
@@ -134,6 +138,16 @@ def main() -> int:
         ck = ck_db["langgraph_checkpoints"].delete_many({}).deleted_count
         ckw = ck_db["langgraph_checkpoint_writes"].delete_many({}).deleted_count
         print(f"limpos: {conv} conversas, {ck} checkpoints, {ckw} checkpoint writes")
+
+    # Reingerir troca o _id de todo chunk, e o grafo aponta para chunks por _id (chunk_ids):
+    # sem reconstruir, o Graph-RAG acharia entidades mas nenhum trecho. A extração tem cache por
+    # texto do chunk, então reconstruir não chama o LLM para trechos que não mudaram.
+    if NATIVE_ENABLED and not args.skip_graph and "kg_entities" in client[DB_NAME].list_collection_names():
+        import build_graph
+
+        print("reconstruindo o grafo do Graph-RAG (cache de extração local)...")
+        if build_graph.main([]) != 0:
+            print("AVISO: o grafo não foi reconstruído; a aba Graph-RAG vai cair para a busca híbrida.")
 
     total = docs.count_documents({})
     print(f"chunks no banco: {total} (esperado {sum(summary.values())})")

@@ -42,7 +42,7 @@ class ChatStreamTests(unittest.TestCase):
                     def __add__(self, other):
                         return self if other is None else Chunk(self.content + (other.content or ""))
 
-                def fake_retrieve(question, access_levels=None, sources=None):
+                def fake_retrieve(question, access_levels=None, sources=None, **kw):
                     return "contexto de teste", [{"chunk_id": "c1"}], {"mode": "hybrid"}
 
                 fake_llm = MagicMock()
@@ -81,7 +81,7 @@ class ChatStreamTests(unittest.TestCase):
                 import backend.api as api
                 from fastapi.testclient import TestClient
 
-                def fake_retrieve(question, access_levels=None, sources=None):
+                def fake_retrieve(question, access_levels=None, sources=None, **kw):
                     return "", [], {"mode": "hybrid"}
 
                 fake_llm = MagicMock()

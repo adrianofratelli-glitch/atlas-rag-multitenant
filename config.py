@@ -65,6 +65,15 @@ QUESTIONS: list[str] = _cfg.get("questions", [
 
 FOLLOWUPS: dict[str, list[str]] = _cfg.get("followups", {})
 
+# Perguntas da aba Graph-RAG: relacionais e de vários saltos, onde a travessia do grafo
+# muda a resposta. As específicas do corpus ficam no client_config.json (fora do git).
+GRAPH_QUESTIONS: list[str] = _cfg.get("graph_questions", [
+    "Quais unidades são responsáveis pelo maior número de ações, e a que objetivos essas ações se ligam?",
+    "Quais sistemas aparecem em mais de um documento, e quais ações dependem deles?",
+    "Que ações contribuem para o mesmo objetivo estratégico, e quem conduz cada uma?",
+    "Quais temas atravessam todos os documentos do corpus?",
+])
+
 DEFAULT_FOLLOWUPS = [
     "📋 Pode detalhar mais sobre este tema?",
     "🗓️ Quais são os próximos passos relacionados?",

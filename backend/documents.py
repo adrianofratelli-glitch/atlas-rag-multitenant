@@ -30,6 +30,9 @@ UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "data/uploads"))
 # month of demos doesn't leave a month of vectors behind. 0 disables the TTL and
 # makes an upload permanent, like a CLI ingestion.
 UPLOAD_TTL_HOURS = float(os.getenv("UPLOAD_TTL_HOURS", "24"))
+# Grafo de conhecimento de cada upload (aba Novo conteúdo, motor Graph-RAG). Só no caminho
+# nativo (o grafo usa autoEmbed); GRAPH_ON_UPLOAD=0 desliga. Falha no grafo nunca falha o upload.
+GRAPH_ON_UPLOAD = NATIVE_ENABLED and os.getenv("GRAPH_ON_UPLOAD", "1") != "0"
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
 MAX_SOURCE_LENGTH = 80
 
@@ -218,6 +221,31 @@ def is_protected(source: str) -> bool:
     ) == 0
 
 
+def _build_upload_graph(job_id: str, source: str, searchable: bool) -> dict:
+    """Fase `graph` do upload: com os índices prontos, o documento já é consultável pela busca
+    híbrida enquanto o grafo é montado."""
+    _update(job_id, phase="graph", searchable=searchable, graph_done=0, graph_total=0)
+    try:
+        import build_graph
+
+        return build_graph.build_upload_graph(
+            get_client()[DB_NAME], source,
+            on_progress=lambda done, total: _update(job_id, graph_done=done, graph_total=total))
+    except Exception as e:  # noqa: BLE001 — sem grafo, o upload segue valendo para o híbrido
+        logger.exception("upload graph failed job_id=%s source=%s", job_id, source)
+        return {"error": f"grafo não construído ({type(e).__name__})"}
+
+
+def delete_upload_graph(source: str) -> int:
+    try:
+        import build_graph
+
+        return build_graph.delete_upload_graph(get_client()[DB_NAME], source)
+    except Exception:  # noqa: BLE001 — o TTL ainda varre o que sobrar
+        logger.exception("upload graph delete failed source=%s", source)
+        return 0
+
+
 def delete_document(source: str) -> int:
     if is_protected(source):
         raise ProtectedDocumentError(source)
@@ -226,6 +254,8 @@ def delete_document(source: str) -> int:
         # chunks can be deleted, so a mixed source can't take the corpus with it.
         tenant_filter({"metadata.source": source, "metadata.expires_at": {"$exists": True}})
     )
+    if GRAPH_ON_UPLOAD:
+        delete_upload_graph(source)
     _bump_corpus_version()
     return result.deleted_count
 
@@ -399,9 +429,12 @@ def _run_job(job_id: str, path: str, source: str, nivel_acesso: str, reset: bool
             source, result["chunks"],
             on_poll=lambda lex, vec: _update(job_id, index_lexical=lex, index_vector=vec),
         )
+        # O grafo só lê os chunks gravados (find), não depende do índice de busca ter sincronizado.
+        graph = _build_upload_graph(job_id, source, searchable) if GRAPH_ON_UPLOAD else None
         _update(
             job_id,
             status="done",
+            graph=graph,
             phase="done" if searchable else "indexing_timeout",
             chunks=result["chunks"],
             expires_at=result["expires_at"],
