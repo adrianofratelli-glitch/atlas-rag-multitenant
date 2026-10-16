@@ -62,3 +62,5 @@ eval/reports/graph_compare.md
 eval/reports/graph_compare.jsonl
 eval/reports/graph_audit.md
 eval/reports/graph_audit.jsonl
+eval/reports/human_review.xlsx
+eval/reports/human_agreement.md

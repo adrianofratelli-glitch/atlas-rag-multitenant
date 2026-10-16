@@ -109,11 +109,7 @@ def judge(question: str, a: str, b: str) -> dict | None:
         return None
 
 
-def _judge_pair(q, results, rival, rng_seed):
-    graph_first = random.Random(f"{rng_seed}:{q['id']}:{rival}").random() < 0.5
-    order = ("graph", rival) if graph_first else (rival, "graph")
-    if any(results[e]["error"] or not results[e]["answer"] for e in order):
-        return None, {}, None
+def _judge_once(q, results, order):
     verdict = judge(q["question"], results[order[0]]["answer"], results[order[1]]["answer"])
     if not verdict:
         return None, {}, None
@@ -123,6 +119,28 @@ def _judge_pair(q, results, rival, rng_seed):
                        "fundamentacao": verdict.get(f"fundamentacao_{slot}")}
               for slot, engine in zip(("a", "b"), order)}
     return winner, scores, verdict.get("motivo")
+
+
+def _judge_pair(q, results, rival, rng_seed):
+    """Julga nas duas ordens (A/B e B/A): vitória só quando as duas leituras concordam.
+
+    Juiz LLM tem viés de posição; com uma ordem só, um par trocava de lado entre rodadas.
+    Discordância vira empate, e as notas são a média das duas leituras.
+    """
+    if any(results[e]["error"] or not results[e]["answer"] for e in ("graph", rival)):
+        return None, {}, None
+    w1, s1, m1 = _judge_once(q, results, ("graph", rival))
+    w2, s2, m2 = _judge_once(q, results, (rival, "graph"))
+    if w1 is None or w2 is None:
+        return w1 or w2, s1 or s2, m1 or m2
+    winner = w1 if w1 == w2 else "empate"
+    scores = {}
+    for e in ("graph", rival):
+        scores[e] = {}
+        for f in ("completude", "fundamentacao"):
+            vals = [s.get(e, {}).get(f) for s in (s1, s2) if isinstance(s.get(e, {}).get(f), (int, float))]
+            scores[e][f] = sum(vals) / len(vals) if vals else None
+    return winner, scores, m1 if w1 == winner else m2
 
 
 def run_one(api: str, q: dict, rng_seed: int) -> dict:
@@ -153,6 +171,8 @@ def report(rows: list[dict]) -> str:
     lines = ["# Híbrido × Graph-RAG", "",
              "Mesma pergunta, mesmo corpus base, mesmo Claude (via gateway); muda só a recuperação. "
              "Cada pergunta é independente (sem histórico).", "",
+             "Cada par é julgado nas duas ordens (A/B e B/A); vitória só quando as duas concordam, "
+             "senão empate.", "",
              "**Limitações:** perguntas escritas por nós, sem gabarito humano; juiz é Claude, o mesmo "
              "modelo que gera; contagem de códigos mede cobertura, não correção. Trate como indício, "
              "não como benchmark.", "",
