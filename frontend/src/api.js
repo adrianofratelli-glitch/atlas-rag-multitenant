@@ -56,7 +56,7 @@ export async function deleteDocument(source) {
  * Stream the chat over SSE (fetch + ReadableStream).
  * handlers: { onMeta(evt), onToken(delta), onDone(), onError(msg) }
  */
-export async function streamChat({ question, messages, threadId, accessLevel, sources, scope, signal }, handlers) {
+export async function streamChat({ question, messages, threadId, accessLevel, sources, scope, engine, signal }, handlers) {
   const { onMeta, onToken, onDone, onError } = handlers
   if (signal?.aborted) return
   const controller = new AbortController()
@@ -78,7 +78,7 @@ export async function streamChat({ question, messages, threadId, accessLevel, so
       body: JSON.stringify({
         question, messages, thread_id: threadId,
         access_level: accessLevel || 'publico',
-        sources: sources || [], scope: scope || 'all',
+        sources: sources || [], scope: scope || 'all', engine: engine || 'hybrid',
       }),
     })
     if (!res.ok || !res.body) {

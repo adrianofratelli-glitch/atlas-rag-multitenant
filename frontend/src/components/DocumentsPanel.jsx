@@ -9,6 +9,7 @@ const PHASE_LABEL = {
   embedding: 'gerando embeddings',
   indexing: 'sincronizando índices (Search + Vector Search)',
   indexing_timeout: 'índices ainda sincronizando',
+  graph: 'montando o grafo (entidades e relações)',
   done: 'pronto para consulta',
   error: 'erro',
 }
@@ -42,6 +43,7 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
   const [open, setOpen] = useState(false)
   const inputRef = useRef(null)
   const pollRef = useRef(null)
+  const graphSeen = useRef(false)
 
   const inWorkspace = (list) => (list || []).filter((d) => d.workspace === workspace)
 
@@ -68,7 +70,15 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
       try {
         const next = await getJob(jobId)
         setJob(next)
+        if (next.phase === 'graph' && !graphSeen.current) {
+          // Already searchable by hybrid retrieval: list and pick it while the graph is built.
+          graphSeen.current = true
+          await refresh()
+          onCorpusChange?.()
+          onSelected?.([next.source])
+        }
         if (next.status === 'done') {
+          graphSeen.current = false
           setBusy(false)
           await refresh()
           onCorpusChange?.()
@@ -174,12 +184,14 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
                 <span>{job.filename}</span>
                 <span style={{ color: job.status === 'error' ? '#FF6960' : C.sub }}>
                   {PHASE_LABEL[job.phase] || job.phase}
-                  {job.total ? ` · ${job.done}/${job.total} chunks` : ''}
+                  {job.phase === 'graph'
+                    ? (job.graph_total ? ` · lote ${job.graph_done}/${job.graph_total}` : '')
+                    : job.total ? ` · ${job.done}/${job.total} chunks` : ''}
                 </span>
               </div>
               <div className="src-track">
                 <div
-                  className={`src-fill${job.phase === 'indexing' ? ' syncing' : ''}`}
+                  className={`src-fill${job.phase === 'indexing' || job.phase === 'graph' ? ' syncing' : ''}`}
                   style={{
                     width: `${job.status === 'error' ? 100 : pct}%`,
                     background: job.status === 'error' ? '#FF6960' : C.green,
@@ -187,7 +199,9 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
                 />
               </div>
               <p className="docs-hint" aria-live="polite">
-                {job.phase === 'indexing'
+                {job.phase === 'graph'
+                  ? 'Já dá para perguntar pela busca híbrida. O grafo deste documento entra no mesmo banco (kg_entities) e expira junto com ele.'
+                  : job.phase === 'indexing'
                   ? 'Os chunks já estão no Atlas; o documento fica disponível para perguntas assim que os dois índices o encontrarem.'
                   : job.phase === 'indexing_timeout'
                     ? 'Os índices ainda não devolvem este documento. Aguarde alguns segundos antes de perguntar sobre ele.'

@@ -6,6 +6,8 @@ import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
 import DocumentsPanel from './DocumentsPanel'
 import ArchitecturePanel from './ArchitecturePanel'
+import GraphPanel from './GraphPanel'
+import GraphWelcome from './GraphWelcome'
 
 const uuid = () => {
   if (crypto.randomUUID) return crypto.randomUUID()
@@ -22,7 +24,12 @@ const uuid = () => {
  * resolves it into the source list, so the two tabs never read each other's
  * corpus even when nothing is picked in the panel.
  */
-export default function WorkspaceView({ config, scope, accessLevel, onStatusRefresh, panel }) {
+export default function WorkspaceView({ config, scope, accessLevel, onStatusRefresh, panel, engine = 'hybrid', engineSwitch = false }) {
+  // Uploads tab: each question can go to hybrid retrieval or to the graph of the uploaded
+  // documents (built at the end of every upload). Same thread, engine chosen per question.
+  const [engineSel, setEngineSel] = useState(engine)
+  const activeEngine = engineSwitch ? engineSel : engine
+  const graph = activeEngine === 'graph'
   const [messages, setMessages] = useState([])
   const [streaming, setStreaming] = useState(false)
   const [threadId] = useState(uuid())
@@ -47,7 +54,7 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
 
     try {
       await streamChat(
-        { question, messages: history, threadId, accessLevel, sources, scope, signal: controller.signal },
+        { question, messages: history, threadId, accessLevel, sources, scope, engine: activeEngine, signal: controller.signal },
         {
           onMeta: (evt) =>
             setMessages((prev) => {
@@ -97,7 +104,19 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
         </Banner>
       )}
 
-      <DocumentsPanel
+      {engineSwitch && config.native && (
+        <div className="graph-modes" role="radiogroup" aria-label="Motor de recuperação">
+          {[['hybrid', 'RAG híbrido'], ['graph', 'Híbrido + grafo do upload']].map(([id, label]) => (
+            <button key={id} type="button" role="radio" aria-checked={engineSel === id}
+              className={engineSel === id ? 'active' : undefined} disabled={streaming} onClick={() => setEngineSel(id)}>
+              {label}
+            </button>
+          ))}
+          <span className="graph-modes-note">o grafo de cada upload é montado no fim da ingestão e expira com ele</span>
+        </div>
+      )}
+
+      {(!graph || scope === 'uploads') && <DocumentsPanel
         workspace={scope}
         readOnly={panel.readOnly}
         title={panel.title}
@@ -108,10 +127,10 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
         maxUploadMb={config.max_upload_mb}
         formats={config.supported_formats}
         ttlHours={config.upload_ttl_hours}
-      />
+      />}
 
       {messages.length === 0 ? (
-        <Welcome config={panel.welcome || config} onPick={send} />
+        graph && scope !== 'uploads' ? <GraphWelcome config={config} onPick={send} /> : <Welcome config={panel.welcome || config} onPick={send} />
       ) : (
         messages.map((m, i) => <ChatMessage key={i} msg={m} />)
       )}
@@ -132,14 +151,16 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
       )}
 
       <div ref={endRef} />
-      <ChatInput placeholder={`Pergunte sobre ${scopeLabel}…`} disabled={streaming} onSend={send} />
+      <ChatInput placeholder={graph && scope !== 'uploads' ? 'Pergunte sobre o que liga unidades, ações, objetivos e sistemas…' : `Pergunte sobre ${scopeLabel}…`} disabled={streaming} onSend={send} />
     </div>
     {config.native && (
-      <ArchitecturePanel
-        phase={phase}
-        stats={streaming ? last?.stats : lastAnswer?.stats}
-        sources={streaming ? last?.sources : lastAnswer?.sources}
-      />
+      (streaming ? graph : lastAnswer ? lastAnswer.stats?.engine === 'graph' : graph)
+        ? <GraphPanel phase={phase} stats={streaming ? last?.stats : lastAnswer?.stats} />
+        : <ArchitecturePanel
+            phase={phase}
+            stats={streaming ? last?.stats : lastAnswer?.stats}
+            sources={streaming ? last?.sources : lastAnswer?.sources}
+          />
     )}
     </div>
   )

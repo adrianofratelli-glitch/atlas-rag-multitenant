@@ -22,11 +22,16 @@ function SourceCard({ i, s }) {
           <span style={{ color: C.muted }}>#{i} · {label}</span>
           {matched.includes('vetorial') && chip('vetorial', C.green)}
           {matched.includes('léxico') && chip('léxico', '#3D9BFF')}
+          {matched.includes('grafo') && chip('grafo', C.purple)}
           {restrito && chip('restrito', '#F5C518')}
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ color: C.sub }}>vetorial {matched.includes('vetorial') ? `${vpct}%` : '—'}</span>
-          <span style={{ color: C.muted }}>→</span>
+          {!matched.includes('grafo') && (
+            <>
+              <span style={{ color: C.sub }}>vetorial {matched.includes('vetorial') ? `${vpct}%` : '—'}</span>
+              <span style={{ color: C.muted }}>→</span>
+            </>
+          )}
           <span style={{ fontWeight: 700, color: fill, background: 'rgba(0,0,0,0.3)', padding: '1px 7px', borderRadius: 4 }}>
             rerank {pct}%
           </span>
@@ -35,6 +40,12 @@ function SourceCard({ i, s }) {
       <div className="src-track">
         <div className="src-fill" style={{ width: `${pct}%`, background: fill }} />
       </div>
+      {s.via?.length > 0 && (
+        <div className="src-via">
+          <span>citado por</span>
+          {s.via.map((v) => <code key={v}>{v}</code>)}
+        </div>
+      )}
       <p style={{ fontSize: 12, color: C.sub, margin: '6px 0 0', lineHeight: 1.6, borderLeft: `2px solid ${fill}55`, paddingLeft: 8 }}>
         {s.preview}…
       </p>
@@ -47,7 +58,7 @@ export default function Sources({ sources }) {
   return (
     <div style={{ marginTop: 10 }}>
       <ExpandableCard
-        title={`${sources.length} fonte(s) · MongoDB Atlas Hybrid Search`}
+        title={`${sources.length} fonte(s) · ${sources.some((s) => s.matched_by?.includes('grafo')) ? 'MongoDB Atlas Graph-RAG' : 'MongoDB Atlas Hybrid Search'}`}
         darkMode
       >
         {sources.map((s, i) => (

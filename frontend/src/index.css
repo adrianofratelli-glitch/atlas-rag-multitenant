@@ -534,3 +534,76 @@ body::after {
 .af-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 10px; color: var(--sub); }
 .af-legend em { margin-left: auto; font: 9.5px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: #ffad00; font-style: normal; }
 @media (prefers-reduced-motion: reduce) { .af-dot { transition: none; } .af-dot.pulse { animation: none; opacity: 1; } }
+
+/* Graph-RAG: traversal animation (GraphTraversal), panel numbers, modal, compare view */
+.gt { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.gt-canvas { display: block; overflow: visible; }
+.gt-ring { fill: none; stroke: var(--border-subtle); stroke-dasharray: 2 4; }
+.gt-edge { stroke: #9ea2a1; stroke-width: 1; transition: opacity .6s ease; }
+.gt-edge.hot { stroke: #d959ea; }
+.gt-node { transition: transform .7s cubic-bezier(.4, 0, .2, 1), opacity .5s ease; will-change: transform, opacity; }
+.gt-node.pulse { animation: gt-pulse 1s ease-in-out infinite; }
+@keyframes gt-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+.gt-halo { fill: none; stroke: var(--text, #fdfff5); stroke-width: 1.2; opacity: .8; }
+.gt-label { font: 9px var(--mono); fill: var(--sub, #cdd5ce); }
+.gt-label.seed { font-size: 10px; font-weight: 700; fill: var(--text, #fdfff5); }
+.gt-bar { fill: rgba(0, 237, 100, 0.04); stroke: var(--border-subtle); transition: opacity .5s; }
+.gt-bar.on { stroke: var(--green, #00ED64); }
+.gt-bar-label { font: 10px var(--mono); fill: var(--text-muted, #9ea2a1); }
+.gt-chunk { fill: #d959ea; transition: transform 1s cubic-bezier(.4, 0, .2, 1), opacity .6s ease; will-change: transform, opacity; }
+.gt-chunk.keep { fill: var(--green, #00ED64); }
+.gt-caption { margin: 0; min-height: 30px; font-size: 11px; color: var(--text); text-align: center; }
+.gt-communities { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+.gt-communities span { font-size: 10px; color: var(--text); border: 1px solid #d959ea88; border-radius: 999px; padding: 1px 8px; }
+.gt-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; font-size: 10px; color: var(--sub); }
+.gt-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.gt.large .gt-caption { font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .gt-node, .gt-edge, .gt-chunk { transition: none; } .gt-node.pulse { animation: none; opacity: 1; } }
+
+.gp-numbers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; text-align: center; font-size: 9.5px; color: var(--sub); }
+.gp-numbers b { display: block; font: 700 15px var(--mono); color: var(--green, #00ED64); }
+
+.gm { max-width: 1040px; }
+.gm-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 24px; align-items: start; }
+.gm-side { display: flex; flex-direction: column; gap: 8px; }
+.gm-docs { margin: 4px 0 0; font-size: 12px; color: var(--sub); }
+.gm-limits ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--sub); line-height: 1.55; }
+@media (max-width: 900px) { .gm-body { grid-template-columns: 1fr; justify-items: center; } .gm .gt-canvas { width: 100%; height: auto; } }
+
+.gw-types { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 0; font-size: 12px; color: var(--sub); }
+.gw-types i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+.graph-modes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0 4px; }
+.graph-modes button { min-height: 36px; padding: 0 14px; border: 1px solid var(--border-subtle); border-radius: 999px; background: transparent; color: var(--text-muted); font: 600 12.5px var(--sans, inherit); cursor: pointer; }
+.graph-modes button:hover { color: var(--text); }
+.graph-modes button.active { color: var(--bg, #061621); background: var(--green, #00ED64); border-color: var(--green, #00ED64); }
+.graph-modes button:focus-visible { outline: 2px solid var(--green, #00ED64); outline-offset: 2px; }
+.graph-modes-note { margin-left: auto; font: 11px var(--mono); color: var(--text-muted); }
+.graph-missing { margin: 24px 0; padding: 20px; border: 1px dashed var(--border-subtle); border-radius: 12px; color: var(--sub); }
+.graph-missing h2 { margin: 0 0 6px; color: var(--text); font-size: 18px; }
+.graph-missing code { font: 12px var(--mono); color: var(--green, #00ED64); }
+
+.src-via { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; font-size: 10px; color: var(--text-muted); }
+.src-via code { font: 10px var(--mono); color: var(--text); border: 1px solid #d959ea66; border-radius: 4px; padding: 0 5px; }
+
+.cmp-row { margin: 18px 0 26px; padding-bottom: 18px; border-bottom: 1px solid var(--border-subtle); }
+.cmp-question { margin: 0 0 10px; font-size: 15px; color: var(--text); }
+.cmp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.cmp-side { min-width: 0; }
+.cmp-side-head { display: flex; flex-direction: column; margin-bottom: 6px; padding-left: 8px; border-left: 3px solid var(--green, #00ED64); }
+.cmp-side.graph .cmp-side-head { border-left-color: #d959ea; }
+.cmp-side-head strong { color: var(--text); font-size: 13px; }
+.cmp-side-head span { color: var(--text-muted); font: 10.5px var(--mono); }
+.cmp-side .chat-row .avatar { display: none; }
+.cmp-metrics { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-sec); font-size: 12px; }
+.cmp-metrics > div { display: grid; grid-template-columns: minmax(0, 1.6fr) 1fr 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border-subtle); color: var(--sub); }
+.cmp-metrics > div:last-of-type { border-bottom: 0; }
+.cmp-metrics b { font: 700 12px var(--mono); color: var(--green, #00ED64); }
+.cmp-metrics b.g { color: #d959ea; }
+.cmp-metrics-head span { font: 9.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+.cmp-note { margin: 6px 0 0; font-size: 11px; color: var(--text-muted); }
+@media (max-width: 900px) { .cmp-cols { grid-template-columns: 1fr; } }
+.gt-num { font: 700 8px var(--mono); fill: #061621; pointer-events: none; }
+.gt-seeds { margin: 0; padding-left: 20px; font-size: 11.5px; color: var(--text); columns: 2; column-gap: 18px; max-width: 420px; }
+.gt-seeds li { break-inside: avoid; margin-bottom: 2px; }
+.gt-seeds i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }

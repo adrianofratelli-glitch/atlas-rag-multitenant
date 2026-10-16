@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { C } from '../theme'
 import ArchitectureModal from './ArchitectureModal'
+import GraphModal from './GraphModal'
 
 // Atlas hybrid-search showcase: vector + lexical -> fusion -> rerank, with metadata.
 export default function EngineStrip({ stats }) {
   const [showArch, setShowArch] = useState(false)
   if (!stats) return null
+  if (stats.engine === 'graph' && !stats.graph_degraded) return <GraphStrip stats={stats} />
   const vec = stats.vector_hits ?? '—'
   const lex = stats.lexical_hits ?? 0
   const fused = stats.fused ?? '—'
@@ -68,6 +70,38 @@ export default function EngineStrip({ stats }) {
       {showArch && (
         <ArchitectureModal stats={stats} onClose={() => setShowArch(false)} />
       )}
+    </div>
+  )
+}
+
+// Graph-RAG turn: entry entities -> traversed subgraph -> cited chunks -> rerank.
+function GraphStrip({ stats }) {
+  const [showArch, setShowArch] = useState(false)
+  const docs = stats.documents_covered || []
+  return (
+    <div className="engine-strip">
+      <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1.4, color: C.purple, textTransform: 'uppercase' }}>
+        ⚡ 1 aggregation · grafo
+      </span>
+      <span style={{ fontSize: 11, color: C.text }}>
+        <span className="hint" title="entidades de entrada achadas por $rankFusion ($vectorSearch + $search nas entidades)">{stats.seeds} entradas</span>
+        <span style={{ color: C.muted }}> → </span>
+        <span className="hint" title={`$lookup (1º salto) + $graphLookup (até ${stats.hops} saltos, sem atravessar hubs)`}>
+          {stats.graph_nodes} nós · {stats.graph_edges} relações
+        </span>
+        <span style={{ color: C.muted }}> → </span>
+        <span className="hint" title="trechos citados pelas entidades e relações do subgrafo">{stats.evidence_candidates} trechos</span>
+        <span style={{ color: C.muted }}> → </span>
+        <strong className="hint" style={{ color: C.green }} title={`$rerank (${stats.rerank_model}); dos finais, ${stats.from_graph ?? 0} vieram do subgrafo e ${stats.from_direct ?? 0} da busca direta`}>{stats.reranked} reranqueados</strong>
+      </span>
+      <span style={{ fontSize: 10, color: C.sub, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span className="hint" title={docs.join(', ')}>{docs.length} documento(s) no subgrafo</span>
+        <span>|</span>
+        <span>{stats.facts} fatos ao prompt</span>
+        <span className="arch-link-narrow">|</span>
+        <button type="button" className="arch-link arch-link-narrow" onClick={() => setShowArch(true)}>ver travessia</button>
+      </span>
+      {showArch && <GraphModal stats={stats} onClose={() => setShowArch(false)} />}
     </div>
   )
 }

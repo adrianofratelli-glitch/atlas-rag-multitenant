@@ -4,6 +4,7 @@ import { getConfig, getStatus } from './api'
 import TopBar from './components/TopBar'
 import OfflineHero from './components/OfflineHero'
 import WorkspaceView from './components/WorkspaceView'
+import GraphTab from './components/GraphTab'
 import { C } from './theme'
 
 const OFFLINE_CONFIG = {
@@ -32,6 +33,11 @@ const TABS = [
     },
   },
   {
+    id: 'graph',
+    label: 'Graph-RAG',
+    panel: { readOnly: true, title: 'Grafo do corpus de referência' },
+  },
+  {
     id: 'uploads',
     label: 'Novo conteúdo',
     panel: {
@@ -50,7 +56,7 @@ export default function App() {
   const [accessLevel, setAccessLevel] = useState('publico') // produção deriva isso de claims autenticadas
   const [tab, setTab] = useState('base')
   // Bumped per tab by "Nova conversa"; the workspace resets on the change.
-  const [resets, setResets] = useState({ base: 0, uploads: 0 })
+  const [resets, setResets] = useState({ base: 0, graph: 0, uploads: 0 })
 
   const refreshStatus = async (force = false) => {
     try {
@@ -137,15 +143,26 @@ export default function App() {
                 or the conversation already on screen. */}
             {TABS.map((t) => (
               <div key={t.id} role="tabpanel" hidden={tab !== t.id}>
+                {t.id === 'graph' ? (
+                  <GraphTab
+                    key={`graph-${resets.graph}`}
+                    config={config}
+                    accessLevel={accessLevel}
+                    onStatusRefresh={() => refreshStatus(true)}
+                    panel={{ ...t.panel, subject: config.document_title }}
+                  />
+                ) : (
                 <WorkspaceView
                   /* Remount on "Nova conversa": fresh thread and history. */
                   key={`${t.id}-${resets[t.id]}`}
                   config={t.id === 'uploads' ? uploadsConfig : config}
                   scope={t.id}
+                  engineSwitch={t.id === 'uploads'}
                   panel={{ ...t.panel, subject: t.id === 'uploads' ? uploadsConfig.document_title : config.document_title }}
                   accessLevel={accessLevel}
                   onStatusRefresh={() => refreshStatus(true)}
                 />
+                )}
               </div>
             ))}
           </>
