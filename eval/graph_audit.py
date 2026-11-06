@@ -48,6 +48,9 @@ Devolva SOMENTE JSON: {"itens": [{"n": <número>, "suporte": "sim"|"parcial"|"na
 
 def _parse(raw):
     raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
+    if not raw.startswith("{"):  # o juiz às vezes analisa em prosa antes do JSON
+        found = re.search(r'\{\s*"itens"\s*:.*\}', raw, flags=re.S)
+        raw = found.group(0) if found else raw
     return {i["n"]: i for i in json.loads(raw).get("itens", [])}
 
 
@@ -73,19 +76,29 @@ def sample(db, n, seed):
     return ent_items, rel_items
 
 
+def _ask(db, batch, system, render, max_tokens):
+    """Uma chamada ao juiz para um lote; devolve {n: veredito} (vazio se falhar ou vier JSON inválido)."""
+    blocks = []
+    for n, it in enumerate(batch, 1):
+        it["chunk_text"] = _chunk_text(db, it["chunk_id"])
+        blocks.append(f"### Item {n}\n{render(it)}\nTRECHO:\n<trecho>\n{it['chunk_text'][:1800]}\n</trecho>")
+    try:
+        return _parse(complete(system, "\n\n".join(blocks), max_tokens=max_tokens))
+    except Exception as exc:  # noqa: BLE001
+        print(f"lote falhou: {exc!r}", flush=True)
+        return {}
+
+
 def judge_batch(db, items, system, render):
+    """Julga em lotes de 8. Lote que falha (ou volta incompleto) é refeito com mais saída e, se
+    ainda faltar, item a item: nenhum item sai com `suporte: None` sem tentativa dupla."""
     out = []
     for i in range(0, len(items), 8):
         batch = items[i:i + 8]
-        blocks = []
+        verdicts = _ask(db, batch, system, render, 1200)
         for n, it in enumerate(batch, 1):
-            it["chunk_text"] = _chunk_text(db, it["chunk_id"])
-            blocks.append(f"### Item {n}\n{render(it)}\nTRECHO:\n<trecho>\n{it['chunk_text'][:1800]}\n</trecho>")
-        try:
-            verdicts = _parse(complete(system, "\n\n".join(blocks), max_tokens=800))
-        except Exception as exc:  # noqa: BLE001
-            print(f"lote falhou: {exc!r}", flush=True)
-            verdicts = {}
+            if not verdicts.get(n, {}).get("suporte"):
+                verdicts[n] = _ask(db, [it], system, render, 1500).get(1, {})
         for n, it in enumerate(batch, 1):
             v = verdicts.get(n, {})
             out.append({**{k: v2 for k, v2 in it.items() if k != "chunk_text"}, "chunk_id": str(it["chunk_id"]),
@@ -94,36 +107,44 @@ def judge_batch(db, items, system, render):
     return out
 
 
+def fill_missing(db, rows):
+    """Rejulga só as linhas sem veredito (auditoria antiga em que um lote falhou em silêncio)."""
+    from bson import ObjectId
+
+    def render_for(r):
+        if "label" in r:
+            return f"ENTIDADE: {r['label']} [{r['type']}]: {r.get('description', '')}"
+        return f"RELAÇÃO: {r['source']} --{r['type']}--> {r['target']}"
+
+    for r in rows:
+        if r.get("suporte"):
+            continue
+        item = {**r, "chunk_id": ObjectId(r["chunk_id"])}
+        system = ENTITY_JUDGE if "label" in r else RELATION_JUDGE
+        v = _ask(db, [item], system, render_for, 1500).get(1, {})
+        r["suporte"], r["tipo_ok"] = v.get("suporte"), v.get("tipo_ok") if "label" in r else None
+    return rows
+
+
 def _rate(rows, value):
     judged = [r for r in rows if r["suporte"]]
     return (sum(1 for r in judged if r["suporte"] == value) / len(judged)) if judged else 0.0
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--n", type=int, default=40)
-    ap.add_argument("--seed", type=int, default=11)
-    args = ap.parse_args(argv)
-    db = get_client()[DB_NAME]
-    ents, rels = sample(db, args.n, args.seed)
-    print(f"entidades: {len(ents)}", flush=True)
-    e_rows = judge_batch(db, ents, ENTITY_JUDGE,
-                         lambda it: f"ENTIDADE: {it['label']} [{it['type']}]: {it['description']}")
-    print(f"relações: {len(rels)}", flush=True)
-    r_rows = judge_batch(db, rels, RELATION_JUDGE,
-                         lambda it: f"RELAÇÃO: {it['source']} --{it['type']}--> {it['target']}")
+def _write_report(db, e_rows, r_rows, seed):
     meta = db["_meta"].find_one({"_id": "graph_build"}) or {}
     typed = [r for r in e_rows if r["tipo_ok"] is not None]
+    judged = lambda rows: sum(1 for r in rows if r["suporte"])  # noqa: E731
     lines = [
         "# Auditoria do grafo extraído", "",
         f"Grafo: {meta.get('entities')} entidades, {meta.get('relations')} relações, "
-        f"{meta.get('merges', 0)} fusões confirmadas pelo passe de duplicatas. Amostra: semente {args.seed}.", "",
+        f"{meta.get('merges', 0)} fusões confirmadas pelo passe de duplicatas. Amostra: semente {seed}.", "",
         "Juiz = o mesmo modelo que extraiu: a precisão abaixo é um teto otimista. A amostra completa "
-        "está em `graph_audit.jsonl` para revisão humana.", "",
-        "| item | amostra | sustentado | parcial | não sustentado | tipo certo |", "|---|---|---|---|---|---|",
-        f"| entidades | {len(e_rows)} | {_rate(e_rows, 'sim'):.0%} | {_rate(e_rows, 'parcial'):.0%} | "
+        "está em `graph_audit.jsonl` para revisão humana. As taxas valem sobre os itens julgados.", "",
+        "| item | amostra | julgados | sustentado | parcial | não sustentado | tipo certo |", "|---|---|---|---|---|---|---|",
+        f"| entidades | {len(e_rows)} | {judged(e_rows)} | {_rate(e_rows, 'sim'):.0%} | {_rate(e_rows, 'parcial'):.0%} | "
         f"{_rate(e_rows, 'nao'):.0%} | {(sum(1 for r in typed if r['tipo_ok']) / len(typed)) if typed else 0:.0%} |",
-        f"| relações | {len(r_rows)} | {_rate(r_rows, 'sim'):.0%} | {_rate(r_rows, 'parcial'):.0%} | "
+        f"| relações | {len(r_rows)} | {judged(r_rows)} | {_rate(r_rows, 'sim'):.0%} | {_rate(r_rows, 'parcial'):.0%} | "
         f"{_rate(r_rows, 'nao'):.0%} | — |", "",
         "## Itens não sustentados ou parciais", "",
     ]
@@ -138,6 +159,29 @@ def main(argv=None) -> int:
     (REPORTS / "graph_audit.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in e_rows + r_rows) + "\n", encoding="utf-8")
     print("\n".join(lines[:12]))
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--n", type=int, default=40)
+    ap.add_argument("--seed", type=int, default=11)
+    ap.add_argument("--fill-missing", action="store_true",
+                    help="rejulga só os itens sem veredito em graph_audit.jsonl, sem reamostrar")
+    args = ap.parse_args(argv)
+    db = get_client()[DB_NAME]
+    if args.fill_missing:
+        rows = [json.loads(line) for line in (REPORTS / "graph_audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows = fill_missing(db, rows)
+        _write_report(db, [r for r in rows if "label" in r], [r for r in rows if "label" not in r], args.seed)
+        return 0
+    ents, rels = sample(db, args.n, args.seed)
+    print(f"entidades: {len(ents)}", flush=True)
+    e_rows = judge_batch(db, ents, ENTITY_JUDGE,
+                         lambda it: f"ENTIDADE: {it['label']} [{it['type']}]: {it['description']}")
+    print(f"relações: {len(rels)}", flush=True)
+    r_rows = judge_batch(db, rels, RELATION_JUDGE,
+                         lambda it: f"RELAÇÃO: {it['source']} --{it['type']}--> {it['target']}")
+    _write_report(db, e_rows, r_rows, args.seed)
     return 0
 
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `eval/graph_audit.py`: a failed judging batch is no longer written as `suporte: None` silently. It is retried with more output room and then item by item; the parser accepts a JSON block after prose; the report gains a `julgados` column; `--fill-missing` re-judges only the unjudged items of an existing `graph_audit.jsonl`. The first run had left 16 of 40 relations unjudged, so the published "relations 75% supported" covered 24 items. With all 40 judged: 80% supported, 18% partial, 2% unsupported (entities unchanged: 80/20/0). `tests/test_graph_audit.py` (5 tests, no network).
+
 ## 1.4.1 (2026-10-16)
 
 Graph-RAG evaluation made robust, and the pending items of 1.4.0 closed.
