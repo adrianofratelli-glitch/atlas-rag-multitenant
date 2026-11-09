@@ -1,5 +1,7 @@
 # Queries, pipelines e índices MongoDB
 
+> Números de linha podem ficar defasados após mudanças: a fonte atualizada é [MAPA_DO_CODIGO.md](../MAPA_DO_CODIGO.md).
+
 > Toda query/aggregation/índice real do repositório, extraída do código (não inventada). Para cada uma: onde está, o que faz, exemplo mascarado, e por quê existe. Se você chegou aqui procurando "onde está a query X" para responder ao gestor, use os títulos abaixo como índice.
 
 **Cuidado com dado sigiloso**: o corpus real de um tenant pode conter dado processual. Os exemplos abaixo usam nomes de arquivo e nomes de tenant fictícios (`documento-x.pdf`, `tenant-x`). Nunca cole aqui `_id`, `thread_id`, texto de chunk ou nome de banco de um tenant real.
@@ -149,7 +151,7 @@ docs.update_search_index("vector_index", vector_def)
 
 ### 2. `text_index` — Atlas Search (BM25 / lexical)
 
-**Onde:** `scripts/setup_db.py:69-82`
+**Onde:** `scripts/setup_db.py:69-79`
 
 ```python
 text_def = {"mappings": {"dynamic": False, "fields": {
@@ -201,7 +203,7 @@ db["documents"].create_index(
 
 ### 5. Busca vetorial — `$vectorSearch`
 
-**Onde:** `backend/agent.py::_vector_pipeline` (linhas 58-79), executada em `backend/agent.py::retrieve_context` (linha 142, dentro de `_run_vector`).
+**Onde:** `backend/agent.py::_vector_pipeline` (linha 88), executada em `backend/agent.py::_retrieve` (`_run_vector`, linha 384; `aggregate` na 389).
 
 ```python
 {"$vectorSearch": {
@@ -241,11 +243,11 @@ collection.aggregate([
 
 **Isolamento multi-tenant:** o filtro `metadata.client_id` é comentado no código como "defense in depth" — redundante hoje porque já existe um banco por tenant, mas se vira uma garantia real vale se a topologia mudar para banco compartilhado. Nunca remova esse filtro achando que é morto.
 
-**Resiliência:** se o embedding da pergunta falhar (timeout/erro da VoyageAI), essa busca é pulada inteiramente e o pipeline degrada para lexical-only (ver linha 129-133 de `backend/agent.py`). Se a própria busca vetorial lançar exceção (índice fora, etc.), o erro é logado e o resultado tratado como lista vazia — não derruba o turno.
+**Resiliência:** se o embedding da pergunta falhar (timeout/erro da VoyageAI), essa busca é pulada inteiramente e o pipeline degrada para lexical-only (ver `backend/agent.py::_retrieve`, linhas 372-382). Se a própria busca vetorial lançar exceção (índice fora, etc.), o erro é logado e o resultado tratado como lista vazia — não derruba o turno.
 
 ### 6. Busca lexical — `$search` (Atlas Search / BM25)
 
-**Onde:** `backend/agent.py::_lexical_pipeline` (linhas 82-96), executada em `backend/agent.py::retrieve_context` (linha 149, dentro de `_run_lexical`).
+**Onde:** `backend/agent.py::_lexical_pipeline` (linha 112), executada em `backend/agent.py::_retrieve` (`_run_lexical`, linha 396; `aggregate` na 401).
 
 ```python
 {"$search": {
@@ -286,7 +288,7 @@ collection.aggregate([
 
 ### 7. Fusão (RRF) e rerank — não são queries MongoDB, mas fecham o pipeline
 
-**Onde:** `backend/agent.py::retrieve_context`, linhas 154-197.
+**Onde:** `backend/agent.py::_retrieve` (linhas 362-467; `retrieve_context` começa na 151); RRF nas linhas ~420-434, fallback `rrf_order` do rerank na ~467.
 
 Não é uma query, é lógica Python: os resultados das duas buscas acima rodam **em paralelo** (`ThreadPoolExecutor`, 2 workers) e são fundidos por Reciprocal Rank Fusion:
 
@@ -439,7 +441,7 @@ Se > 0 e `reset=False`, levanta `AlreadyIndexedError` (evita reindexar sem inten
 
 ### 14. `insert_many` — gravação dos chunks + embeddings
 
-**Onde:** `backend/ingest.py:45` (nativo) e `backend/ingest.py:295` (clássico)
+**Onde:** `backend/ingest.py:45` (nativo, `insert_chunks_auto`) e `backend/ingest.py:298` (clássico, `ingest`)
 
 ```python
 collection.insert_many(docs_to_insert)
@@ -471,7 +473,7 @@ onde cada documento tem a forma:
 
 ### 15. `update_one` upsert — persistir turno de conversa
 
-**Onde:** `backend/api.py::_save_conversation`, linhas 319-335.
+**Onde:** `backend/api.py::_save_conversation` (linha 475; `update_one` na 480).
 
 ```python
 get_client()[DB_NAME]["conversations"].update_one(
@@ -486,7 +488,7 @@ get_client()[DB_NAME]["conversations"].update_one(
 
 ### 16. `find_one` — carregar conversa
 
-**Onde:** `backend/api.py::_load_conversation`, linhas 338-347.
+**Onde:** `backend/api.py::_load_conversation` (linha 494).
 
 ```python
 get_client()[DB_NAME]["conversations"].find_one({"_id": thread_id})
@@ -500,7 +502,7 @@ Limita ao histórico às últimas `MAX_HISTORY_MESSAGES` (16) mensagens ao devol
 
 ### 17. `find_one` + `insert_one` — write-once, verify-forever
 
-**Onde:** `backend/db.py::verify_tenant_identity`, linhas 40-69.
+**Onde:** `backend/db.py::verify_tenant_identity` (linha 40; `find_one`/`insert_one` nas ~51-57).
 
 ```python
 col = get_client()[db_name]["_meta"]

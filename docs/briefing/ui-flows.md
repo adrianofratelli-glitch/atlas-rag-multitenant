@@ -1,5 +1,7 @@
 # Interface, fluxos e roteiro de demo
 
+> Números de linha podem ficar defasados após mudanças: a fonte atualizada é [MAPA_DO_CODIGO.md](../MAPA_DO_CODIGO.md).
+
 > Onde cada tela/componente vive, o contrato de streaming, e o roteiro de 7 passos para apresentar a PoV. Pipeline de recuperação em detalhe: `queries.md`. Arquitetura geral: `architecture.md`.
 
 ## O papel da tela
