@@ -178,7 +178,10 @@ def prometheus_metrics():
 
 @app.get("/api/health")
 def api_health():
-    online, chunks = get_status(force=True)
+    # Cache curto (3 s): o Portal e o balanceador sondam com timeout de ~0,8 s e um ping ao
+    # Atlas em toda chamada (~0,5 s, 1,2 s na primeira) fazia o probe estourar e a PoV
+    # aparecer como degradada logo depois de subir. Uma queda do Mongo ainda aparece em 3 s.
+    online, chunks = get_status(max_age=3)
     payload = {"status": "ready" if online else "degraded", "mongodb": online, "chunks": chunks}
     return JSONResponse(payload, status_code=200 if online else 503)
 
@@ -275,10 +278,10 @@ def _ping_atlas():
         return False, None
 
 
-def get_status(force: bool = False):
+def get_status(force: bool = False, max_age: float = 15):
     with _status_lock:
         now = time.time()
-        if force or (now - _status_cache["ts"] > 15):
+        if force or (now - _status_cache["ts"] > max_age):
             online, chunks = _ping_atlas()
             _status_cache.update(ts=now, online=online, chunks=chunks)
         return _status_cache["online"], _status_cache["chunks"]
