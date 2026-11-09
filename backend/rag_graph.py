@@ -117,7 +117,7 @@ def n_generate(state: ChatState, config) -> dict:
     # chunk_agg (AIMessageChunk) fica de fora do estado do grafo de propósito: não é
     # serializável pelo checkpointer (msgpack não conhece o tipo), e o checkpoint
     # falhava DEPOIS do nó já ter emitido os tokens pro cliente — o mesmo formato de
-    # bug já visto com ObjectId cru na PoV multiagente-atendimento. `track_usage` e a
+    # bug já visto com ObjectId cru na PoV atlas-multi-agent-coordination. `track_usage` e a
     # extração de `usage_metadata` acontecem aqui, dentro do nó, e só o dict resultante
     # (serializável) vai para o estado.
     usage = dict(getattr(chunk_agg, "usage_metadata", None) or {})
