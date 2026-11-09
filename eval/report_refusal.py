@@ -60,7 +60,7 @@ def main():
     path = pathlib.Path(a.answers)
     gate, split = path.stem.split("_")[1:3]
     rows = [json.loads(l) for l in path.open(encoding="utf-8") if l.strip()]
-    import agent
+    from backend import agent
     out = REPORTS / f"refusal_{gate}_{split}.md"
     out.write_text(render(rows, gate=gate, split=split, threshold=agent.MIN_RERANK_SCORE))
     print(out.read_text())

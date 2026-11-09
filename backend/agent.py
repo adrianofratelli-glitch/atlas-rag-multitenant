@@ -5,13 +5,13 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import contextvars
 import voyageai
-import telemetry
-from resilience import retry_call
-from config import (CLIENT_ID, DB_NAME, NATIVE_ENABLED, NATIVE_EMBED_MODEL, NATIVE_RERANK_CANDIDATES,
+from backend import telemetry
+from backend.resilience import retry_call
+from backend.config import (CLIENT_ID, DB_NAME, NATIVE_ENABLED, NATIVE_EMBED_MODEL, NATIVE_RERANK_CANDIDATES,
                     NATIVE_RERANK_MODEL)
-import native_retrieval
-import graph_retrieval
-from db import get_client
+from backend import native_retrieval
+from backend import graph_retrieval
+from backend.db import get_client
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -269,7 +269,7 @@ def _retrieve_native(query, top_k, levels, sources, use_lexical, use_rerank, fin
 def _retrieve_graph(query, levels, sources, final_n, top_k, _capture, scope="base"):
     """Graph-RAG: entidades -> vizinhança -> trechos citados, num aggregation em `kg_entities`.
 
-    `scope` "base": grafo do corpus de referência (build_graph.py); "uploads": grafos dos
+    `scope` "base": grafo do corpus de referência (backend/build_graph.py); "uploads": grafos dos
     documentos enviados pela UI (montados no fim de cada upload). Se o aggregation
     falhar (grafo ausente, índice fora), cai para a recuperação híbrida nativa e marca
     `graph_degraded`: o turno responde, e a UI diz que não foi pelo grafo.

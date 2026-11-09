@@ -8,7 +8,7 @@ beautifulsoup4>=4.12,<5
 openpyxl>=3.1,<4
 python-pptx>=1.0,<2
 
-# Document loaders used by ingest.py (PDF/DOCX/TXT/CSV/HTML) and bench/corpus_stats.py.
+# Document loaders used by backend/ingest.py (PDF/DOCX/TXT/CSV/HTML) and bench/corpus_stats.py.
 langchain-community>=0.4,<0.5
 
 # Local venv only (tracing extra of pov-shared, opt-in via TRACE_SINK): 2.1.5 with

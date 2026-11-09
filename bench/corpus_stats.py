@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from langchain_community.document_loaders import PyPDFLoader  # noqa: E402
-from db import get_client  # noqa: E402
+from backend.db import get_client  # noqa: E402
 
 # Agnóstico de tenant: os caminhos e os bancos do comparativo vêm do ambiente.
 # BENCH_PDF/BENCH_MD são as duas extrações do MESMO documento; BENCH_DB_PDF/BENCH_DB_MD

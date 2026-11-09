@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("MONGODB_URI", "mongodb://localhost:27017")
 os.environ.setdefault("MONGO_URI", "mongodb://localhost:27017")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import db as module
+from backend import db as module
 
 
 class ClientConcurrencyTests(unittest.TestCase):

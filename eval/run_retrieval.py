@@ -35,7 +35,7 @@ CACHE = REPORTS / f"retrieval_cache{TAG}.json"
 
 
 def collect(rows, ks, refresh):
-    import agent
+    from backend import agent
     cache = {} if refresh or not CACHE.exists() else json.loads(CACHE.read_text())
     for n, r in enumerate(rows, 1):
         for k in ks:

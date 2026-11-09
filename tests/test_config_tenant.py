@@ -1,7 +1,7 @@
 """CLIENT_ID must be mandatory: an operator forgetting to set it (or copying a
 .env from another tenant) must not silently boot against `rag_default`.
 
-Run in a subprocess with a fresh interpreter: config.py raises at import
+Run in a subprocess with a fresh interpreter: backend/config.py raises at import
 time, and by the time this test module runs, other test modules in the same
 process may have already imported `config` successfully (with CLIENT_ID set)
 — Python caches that import, so re-importing in-process would not re-run the
@@ -26,11 +26,11 @@ def _run_import_config(extra_env: dict) -> subprocess.CompletedProcess:
     }
     env.update(extra_env)
     # Run from an empty scratch directory, not ROOT: the repo's real .env sets
-    # CLIENT_ID (config.py calls load_dotenv()), which would mask exactly the
+    # CLIENT_ID (backend/config.py calls load_dotenv()), which would mask exactly the
     # "operator forgot to set CLIENT_ID" scenario this test exercises.
     with tempfile.TemporaryDirectory() as scratch:
         return subprocess.run(
-            [sys.executable, "-c", "import config"],
+            [sys.executable, "-c", "import backend.config"],
             cwd=scratch,
             env=env,
             capture_output=True,

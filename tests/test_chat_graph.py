@@ -1,8 +1,8 @@
-"""Regressão do /api/chat depois da migração pra rag_graph.py (retrieve -> generate
+"""Regressão do /api/chat depois da migração pra backend/rag_graph.py (retrieve -> generate
 como StateGraph, streaming via thread + fila em vez do generator síncrono direto).
 
 Roda em subprocess com interpretador limpo pelo mesmo motivo de test_config_tenant.py:
-config.py levanta na importação sem CLIENT_ID, e outros módulos de teste já podem ter
+backend/config.py levanta na importação sem CLIENT_ID, e outros módulos de teste já podem ter
 importado config/api no mesmo processo.
 """
 import json
@@ -30,7 +30,7 @@ class ChatStreamTests(unittest.TestCase):
             from unittest.mock import patch, MagicMock
             from fastapi.testclient import TestClient
             sys.path.insert(0, ".")
-            import db
+            from backend import db
             with patch.object(db, "get_client", return_value=MagicMock()), \\
                  patch.object(db, "verify_tenant_identity", return_value=None):
                 import backend.api as api
@@ -55,8 +55,8 @@ class ChatStreamTests(unittest.TestCase):
 
                 with patch.object(api, "_get_llm", return_value=fake_llm), \\
                      patch.object(api, "_save_conversation", fake_save), \\
-                     patch("rag_graph.retrieve_context", fake_retrieve), \\
-                     patch("rag_graph.insufficient_evidence", return_value=False):
+                     patch("backend.rag_graph.retrieve_context", fake_retrieve), \\
+                     patch("backend.rag_graph.insufficient_evidence", return_value=False):
                     client = TestClient(api.app)
                     with client.stream("POST", "/api/chat", json={"question": "oi", "messages": []}) as resp:
                         body = "".join(resp.iter_text())
@@ -75,7 +75,7 @@ class ChatStreamTests(unittest.TestCase):
             import sys, json
             from unittest.mock import patch, MagicMock
             sys.path.insert(0, ".")
-            import db
+            from backend import db
             with patch.object(db, "get_client", return_value=MagicMock()), \\
                  patch.object(db, "verify_tenant_identity", return_value=None):
                 import backend.api as api
@@ -86,8 +86,8 @@ class ChatStreamTests(unittest.TestCase):
 
                 fake_llm = MagicMock()
                 with patch.object(api, "_get_llm", return_value=fake_llm), \\
-                     patch("rag_graph.retrieve_context", fake_retrieve), \\
-                     patch("rag_graph.insufficient_evidence", return_value=True):
+                     patch("backend.rag_graph.retrieve_context", fake_retrieve), \\
+                     patch("backend.rag_graph.insufficient_evidence", return_value=True):
                     client = TestClient(api.app)
                     with client.stream("POST", "/api/chat", json={"question": "oi", "messages": []}) as resp:
                         body = "".join(resp.iter_text())

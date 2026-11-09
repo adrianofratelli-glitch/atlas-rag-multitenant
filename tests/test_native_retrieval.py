@@ -9,9 +9,9 @@ os.environ.setdefault("VOYAGE_API_KEY", "test")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test")
 os.environ.setdefault("CLIENT_ID", "test-tenant")
 
-import config
-import native_retrieval as nr
-from config import CLIENT_ID
+from backend import config
+from backend import native_retrieval as nr
+from backend.config import CLIENT_ID
 
 
 class TestDbGuard(unittest.TestCase):
@@ -172,7 +172,7 @@ class TestRunNative(unittest.TestCase):
 
 class TestAgentNative(unittest.TestCase):
     def _patched(self, rows, **extra):
-        import agent
+        from backend import agent
         from unittest import mock
         col = FakeCol(rows)
         stack = [mock.patch.object(agent, "NATIVE_ENABLED", True),
@@ -207,14 +207,14 @@ class TestAgentNative(unittest.TestCase):
         self.assertEqual(stats["mode"], "no_context")
 
     def test_degraded_native_does_not_refuse_by_score(self):
-        import agent
+        from backend import agent
         stats = {"native": True, "rerank_degraded": True}
         self.assertFalse(agent.insufficient_evidence([{"rerank_score": 0.01}], stats))
 
 
 class TestIngestAuto(unittest.TestCase):
     def test_insert_chunks_auto_omits_embedding_and_keeps_metadata(self):
-        import ingest
+        from backend import ingest
         from langchain_core.documents import Document
         inserted = []
 
@@ -233,7 +233,7 @@ class TestIngestAuto(unittest.TestCase):
         self.assertNotIn("expires_at", inserted[0]["metadata"])
 
     def test_mode_follows_flag_and_override(self):
-        import ingest
+        from backend import ingest
         from unittest import mock
         with mock.patch.dict(os.environ, {"EMBED_MODE": "auto"}):
             self.assertTrue(ingest.auto_embed_mode())

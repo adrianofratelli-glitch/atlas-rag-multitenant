@@ -12,7 +12,7 @@ python-multipart>=0.0.9,<0.1
 aiohttp>=3.14.3,<4
 pypdf>=6.19,<7
 
-# Turno de chat (rag_graph.py) como StateGraph: retrieve -> (refuse | generate).
+# Turno de chat (backend/rag_graph.py) como StateGraph: retrieve -> (refuse | generate).
 # Checkpoint em MongoDB quando MONGO_URI está configurada, MemorySaver senão.
 langgraph>=1,<2
 langgraph-checkpoint-mongodb>=0.5.1,<1

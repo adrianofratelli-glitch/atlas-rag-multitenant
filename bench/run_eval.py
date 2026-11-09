@@ -1,7 +1,7 @@
 """Run the gold set against two Atlas stores (PDF-ingested vs Markdown-ingested).
 
 Both stores are queried from a single process so the query-embedding cache in
-agent.py is shared: each question is embedded once, not once per store.
+backend/agent.py is shared: each question is embedded once, not once per store.
 """
 import argparse
 import json
@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import agent  # noqa: E402
+from backend import agent  # noqa: E402
 from bench.llm import complete  # noqa: E402
 
 HERE = Path(__file__).parent

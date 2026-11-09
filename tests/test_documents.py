@@ -79,7 +79,7 @@ class TestUploadTtl(unittest.TestCase):
     def test_ingest_stamps_expires_at_only_when_ttl_given(self):
         import inspect
 
-        import ingest as ingest_module
+        from backend import ingest as ingest_module
 
         signature = inspect.signature(ingest_module.ingest)
         self.assertIn("ttl_hours", signature.parameters)

@@ -21,9 +21,9 @@ from langgraph.graph import END, StateGraph
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pymongo import MongoClient as SyncMongoClient
 
-import telemetry
-from agent import insufficient_evidence, retrieve_context
-from resilience import stream_with_retry
+from backend import telemetry
+from backend.agent import insufficient_evidence, retrieve_context
+from backend.resilience import stream_with_retry
 
 
 class ChatState(TypedDict, total=False):

@@ -82,7 +82,7 @@ graph TD
 
 If one of the two indexes fails, the other carries the query. The stable instruction block (including a document outline) is cached on the Anthropic API, so repeated turns cost less. The outline is the first line of each page of the documents in scope; it is built with the same `metadata.client_id` + `nivel_acesso` + `metadata.source` filter as the search, goes through the same prompt-injection filter, and is labelled in the prompt as a page map, not as evidence. Its in-memory cache is keyed by tenant, access level and documents, is cleared on every upload and delete, and expires after 60 s (`OUTLINE_CACHE_TTL_S`) so a delete outside the API (TTL sweep, script) does not linger. Conversations are persisted in MongoDB and resumed by thread ID.
 
-Ingestion accepts PDF, DOCX, TXT, CSV, Markdown, HTML, JSON, XLSX, and PPTX, through the CLI (`ingest.py`) or the UI upload, which enqueues a job and reports progress at `/api/documents/jobs/{job_id}`. The job is reported `done` only when both indexes return the new document (`$searchMeta` count of its chunks and a `$vectorSearch` restricted to it, tenant-filtered); until then it stays in phase `indexing` and the UI says the indexes are syncing. If they take longer than `UPLOAD_INDEX_WAIT_S` (120 s) the job finishes with `searchable: false` and the UI keeps a "still syncing" notice instead of announcing it as ready. Documents live in the same collection, separated by `metadata.source`, which is a filter field in both search indexes.
+Ingestion accepts PDF, DOCX, TXT, CSV, Markdown, HTML, JSON, XLSX, and PPTX, through the CLI (`backend/ingest.py`) or the UI upload, which enqueues a job and reports progress at `/api/documents/jobs/{job_id}`. The job is reported `done` only when both indexes return the new document (`$searchMeta` count of its chunks and a `$vectorSearch` restricted to it, tenant-filtered); until then it stays in phase `indexing` and the UI says the indexes are syncing. If they take longer than `UPLOAD_INDEX_WAIT_S` (120 s) the job finishes with `searchable: false` and the UI keeps a "still syncing" notice instead of announcing it as ready. Documents live in the same collection, separated by `metadata.source`, which is a filter field in both search indexes.
 
 > Proof of concept: the access level is chosen in the UI for demonstration. In production it would come from authentication (SSO / JWT), never from the client.
 
@@ -102,9 +102,9 @@ ALLOW_DEMO_DB_WRITE=1 python scripts/reset_demo.py data/document.pdf
 ./run.sh                      # backend 127.0.0.1:8180, frontend 127.0.0.1:5180
 ```
 
-`scripts/reset_demo.py` is also the way back to a clean demo: it creates whatever collection or search index is missing (`setup_db_native.py`, or `setup_db.py` on the classic path), re-ingests every corpus file with reset (on the native path Atlas regenerates the embeddings through `autoEmbed`), removes uploaded chunks and any source outside the corpus, clears the tenant's conversations and LangGraph checkpoints (`--keep-conversations` keeps them) and waits until a real retrieval query returns passages. The corpus comes from the arguments, else `DEMO_CORPUS` (comma-separated paths), else every supported file directly under `data/`; two files with the same name stem are refused, because they would become the same `metadata.source`. `--dry-run` prints the plan. On the reference tenant (701 chunks, three documents) a reset takes about 25 seconds.
+`scripts/reset_demo.py` is also the way back to a clean demo: it creates whatever collection or search index is missing (`scripts/setup_db_native.py`, or `scripts/setup_db.py` on the classic path), re-ingests every corpus file with reset (on the native path Atlas regenerates the embeddings through `autoEmbed`), removes uploaded chunks and any source outside the corpus, clears the tenant's conversations and LangGraph checkpoints (`--keep-conversations` keeps them) and waits until a real retrieval query returns passages. The corpus comes from the arguments, else `DEMO_CORPUS` (comma-separated paths), else every supported file directly under `data/`; two files with the same name stem are refused, because they would become the same `metadata.source`. `--dry-run` prints the plan. On the reference tenant (701 chunks, three documents) a reset takes about 25 seconds.
 
-The individual steps stay available: `python setup_db_native.py`, then `python ingest.py data/document.pdf`. Both write data, so they go through the same `*_test` / `ALLOW_DEMO_DB_WRITE=1` guard.
+The individual steps stay available: `python scripts/setup_db_native.py`, then `python -m backend.ingest data/document.pdf`. Both write data, so they go through the same `*_test` / `ALLOW_DEMO_DB_WRITE=1` guard.
 
 By default the launcher serves the optimized frontend build without a watcher. For HMR editing run `POV_DEV=1 ./run.sh`; the build is only redone when sources, lockfile, or configuration change.
 
@@ -120,7 +120,7 @@ DOCUMENT_TITLE=Document Title
 DOCUMENT_DESCRIPTION=Shown in the header
 ```
 
-The classic path (`RAG_NATIVE=0`) uses `python setup_db.py` instead, which creates a vector index over client-side `voyage-3` embeddings. Atlas search indexes take about a minute to become queryable, and an `autoEmbed` index also needs a short while to embed what was inserted. Ingest restricted content with `--nivel restrito`, reindex with `--reset`. VoyageAI's free tier allows 3 requests per minute, so ingestion embeds in small batches with a pause (`VOYAGE_SLEEP_S`) and inserts each batch as it goes, so an interruption does not lose progress.
+The classic path (`RAG_NATIVE=0`) uses `python scripts/setup_db.py` instead, which creates a vector index over client-side `voyage-3` embeddings. Atlas search indexes take about a minute to become queryable, and an `autoEmbed` index also needs a short while to embed what was inserted. Ingest restricted content with `--nivel restrito`, reindex with `--reset`. VoyageAI's free tier allows 3 requests per minute, so ingestion embeds in small batches with a pause (`VOYAGE_SLEEP_S`) and inserts each batch as it goes, so an interruption does not lose progress.
 
 Optional: `DB_NAME`, `SYSTEM_PROMPT_EXTRA`, `ALLOWED_ORIGINS`, `MAX_UPLOAD_MB` (default 25), `UPLOAD_DIR` (default `data/uploads`), `UPLOAD_TTL_HOURS` (default 24; `0` makes uploads permanent).
 
@@ -128,11 +128,11 @@ The TTL sets `metadata.expires_at` **only** on chunks uploaded through the UI. T
 
 Uploads run on a single worker: the same VoyageAI quota limits ingestion, so jobs queue instead of competing. A large document takes minutes on the free tier; in a live demo prefer small files or a paid key with a low `VOYAGE_SLEEP_S`.
 
-Tests: `python -m unittest discover -s tests -v` (127 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
+Tests: `python -m unittest discover -s tests -v` (190 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
 
 ## Native retrieval on MongoDB 9
 
-Embedding, fusion, and rerank run inside Atlas, in a single aggregation (`native_retrieval.py`):
+Embedding, fusion, and rerank run inside Atlas, in a single aggregation (`backend/native_retrieval.py`):
 
 ```
 $rankFusion { vector: $vectorSearch (autoEmbed, voyage-4), lexical: $search (BM25) }
@@ -159,13 +159,13 @@ The embedding upgrade is the clearest gain (+8 points of recall@1 without rerank
 
 A third tab answers "can MongoDB do Graph-RAG?" over the same reference corpus and the same database. Only retrieval changes.
 
-**Build (offline, `build_graph.py`).** Claude, through the gateway, extracts typed entities (unit, action, objective, system, norm, indicator, risk; never people) and typed relations from every chunk. `graph_extract.resolve` merges mentions by normalized name, code and acronym. Louvain (`networkx`) groups communities and Claude summarizes each one. The result lives in `kg_entities` (one document per entity, edges embedded as an adjacency list, `$jsonSchema`-validated) and `kg_communities`, next to `documents`, with `autoEmbed` vector indexes and an Atlas Search index on names and acronyms.
+**Build (offline, `backend/build_graph.py`).** Claude, through the gateway, extracts typed entities (unit, action, objective, system, norm, indicator, risk; never people) and typed relations from every chunk. `graph_extract.resolve` merges mentions by normalized name, code and acronym. Louvain (`networkx`) groups communities and Claude summarizes each one. The result lives in `kg_entities` (one document per entity, edges embedded as an adjacency list, `$jsonSchema`-validated) and `kg_communities`, next to `documents`, with `autoEmbed` vector indexes and an Atlas Search index on names and acronyms.
 
 ```bash
-ALLOW_DEMO_DB_WRITE=1 python build_graph.py   # cached per chunk text: a rebuild makes no LLM calls
+ALLOW_DEMO_DB_WRITE=1 python -m backend.build_graph   # cached per chunk text: a rebuild makes no LLM calls
 ```
 
-**Query (`graph_retrieval.py`).** One aggregation on `kg_entities`:
+**Query (`backend/graph_retrieval.py`).** One aggregation on `kg_entities`:
 
 ```
 $rankFusion { $vectorSearch (autoEmbed) + $search (name, acronym, code) }   entry entities
@@ -288,18 +288,27 @@ Set the tenant values in `.env`, put the document in `data/`, customize `client_
 ## Layout
 
 ```
-backend/api.py        FastAPI app (config / status / chat SSE / metrics)
+backend/              server and agent code (importable package: `uvicorn backend.api:app`)
+  api.py                FastAPI app (config / status / chat SSE / metrics)
+  documents.py          document library: upload, ingestion jobs, upload removal
+  agent.py              retrieval entry point: classic path (RRF + rerank) or the native one
+  native_retrieval.py   MongoDB 9 pipeline: $rankFusion + $rerank, autoEmbed, scoreDetails parsing
+  graph_extract.py      Graph-RAG: entity/relation extraction and resolution
+  graph_retrieval.py    Graph-RAG: single-aggregation graph query
+  build_graph.py        Graph-RAG build (also run by the upload flow): `python -m backend.build_graph`
+  rag_graph.py          chat turn as a LangGraph StateGraph (retrieve -> refuse | generate)
+  ingest.py             multi-format ingestion (--nivel sets the access level): `python -m backend.ingest`
+  llm_gateway.py        LLM destination: Grove settings (pov-shared) or an explicit ANTHROPIC_BASE_URL
+  config.py db.py       configuration and shared Mongo client
+  resilience.py         retries, deadlines, friendly errors
+  observability.py      structured logging + /api/metrics
+  telemetry.py          tracing (fail-open)
 frontend/             React + Vite + LeafyGreen
-agent.py              retrieval entry point: classic path (RRF + rerank) or the native one
-native_retrieval.py   MongoDB 9 pipeline: $rankFusion + $rerank, autoEmbed, scoreDetails parsing
-ingest.py             multi-format ingestion (--nivel sets the access level)
-backend/documents.py  document library: upload, ingestion jobs, upload removal
-setup_db.py           classic path: collections and the two search indexes
-setup_db_native.py    native path: collections, autoEmbed vector index, text index
-scripts/reset_demo.py one-command reset: indexes, corpus, embeddings, cleanup, readiness probe
-llm_gateway.py        LLM destination: Grove settings (pov-shared) or an explicit ANTHROPIC_BASE_URL
-config.py db.py       configuration and shared Mongo client
-observability.py      structured logging + /api/metrics
+scripts/              command-line setup and utilities
+  setup_db.py           classic path: collections and the two search indexes
+  setup_db_native.py    native path: collections, autoEmbed vector index, text index
+  reset_demo.py         one-command reset: indexes, corpus, embeddings, cleanup, readiness probe
+tests/  eval/  bench/  docs/  docker/
 ```
 
 ## Stack

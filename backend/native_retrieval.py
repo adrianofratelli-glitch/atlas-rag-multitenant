@@ -1,7 +1,7 @@
 """Recuperação híbrida nativa no Atlas: autoEmbed + $rankFusion + $rerank num único aggregation."""
 import logging
 
-from config import (
+from backend.config import (
     CLIENT_ID, NATIVE_EMBED_MODEL, NATIVE_RERANK_CANDIDATES, NATIVE_RERANK_MODEL,
 )
 

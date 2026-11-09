@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from pymongo.errors import DuplicateKeyError
-import db
+from backend import db
 
 class TenantIdentityRaceTests(unittest.TestCase):
     def verify_race(self, winner):

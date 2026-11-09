@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # CLIENT_ID names the tenant's database (rag_<CLIENT_ID>) and is stamped on
-# every chunk (metadata.client_id, see ingest.py) and filtered on every query
-# (see agent.py). Copying a .env from another tenant, or simply forgetting to
+# every chunk (metadata.client_id, see backend/ingest.py) and filtered on every query
+# (see backend/agent.py). Copying a .env from another tenant, or simply forgetting to
 # set it, must not silently boot against some other database — so there is no
 # default. The only way to run without it is to opt in explicitly via
 # ALLOW_DEFAULT_TENANT=true (local/dev convenience only).

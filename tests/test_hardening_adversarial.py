@@ -24,10 +24,10 @@ os.environ["RAG_NATIVE"] = "0"
 
 from pydantic import ValidationError  # noqa: E402
 
-import agent  # noqa: E402
-import native_retrieval  # noqa: E402
-import rag_graph  # noqa: E402
-import resilience  # noqa: E402
+from backend import agent  # noqa: E402
+from backend import native_retrieval  # noqa: E402
+from backend import rag_graph  # noqa: E402
+from backend import resilience  # noqa: E402
 from backend import documents  # noqa: E402
 from backend.api import ChatBody, _safe_request_id  # noqa: E402
 
@@ -154,7 +154,7 @@ class UploadAdversarial(unittest.TestCase):
         wb.assert_not_called()
 
     def test_ttl_reset_never_deletes_permanent_chunks(self):
-        import ingest as ingest_mod
+        from backend import ingest as ingest_mod
 
         col = mock.MagicMock()
         col.count_documents.side_effect = lambda flt, **k: 5 if "metadata.expires_at" not in flt else 1
@@ -205,7 +205,7 @@ class IndirectInjectionAdversarial(unittest.TestCase):
         return {"text": text, "metadata": {"source": "upload", "page": 1}}
 
     def test_filter_is_on_by_default(self):
-        r = _clean_env_run("import agent; print(agent.INJECTION_FILTER)")
+        r = _clean_env_run("from backend import agent; print(agent.INJECTION_FILTER)")
         self.assertEqual(r.stdout.strip(), "True", r.stderr)
 
     def test_injected_chunks_are_dropped_even_when_diluted(self):
@@ -235,17 +235,19 @@ class ResilienceDefaults(unittest.TestCase):
     def test_retry_and_deadline_are_on_by_default(self):
         r = _clean_env_run("""
             from unittest import mock
-            import db
+            from backend import db
             with mock.patch.object(db, "verify_tenant_identity"):
-                import agent, backend.api as api
+                from backend import agent
+                import backend.api as api
             print(agent.VOYAGE_MAX_ATTEMPTS, api.LLM_STREAM_MAX_ATTEMPTS, api.STREAM_DEADLINE_S)
         """)
         self.assertEqual(r.stdout.strip(), "3 3 120.0", r.stderr)
 
     def test_flags_still_switch_it_off(self):
         r = _clean_env_run("""
-            import db
-            import agent, backend.api as api
+            from backend import db
+            from backend import agent
+            import backend.api as api
             print(agent.VOYAGE_MAX_ATTEMPTS, api.LLM_STREAM_MAX_ATTEMPTS, api.STREAM_DEADLINE_S, agent.INJECTION_FILTER)
         """, {"VOYAGE_MAX_ATTEMPTS": "1", "LLM_STREAM_MAX_ATTEMPTS": "1", "STREAM_DEADLINE_S": "0",
               "RAG_INJECTION_FILTER": "0"})
@@ -396,13 +398,13 @@ class CheckpointHygiene(unittest.TestCase):
 # ---------------------------------------------------------------- gateway explícito
 class GatewayDestination(unittest.TestCase):
     def test_no_implicit_provider_endpoint(self):
-        import llm_gateway
+        from backend import llm_gateway
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=True):
             with self.assertRaises(llm_gateway.GatewayNotConfigured):
                 llm_gateway.gateway_settings()
 
     def test_explicit_base_url_sends_bearer_and_key(self):
-        import llm_gateway
+        from backend import llm_gateway
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": "https://gw.example/x"},
                              clear=True):
             cfg = llm_gateway.gateway_settings()
@@ -410,7 +412,7 @@ class GatewayDestination(unittest.TestCase):
                                "headers": {"Authorization": "Bearer k"}})
 
     def test_grove_settings_win_when_pov_shared_is_installed(self):
-        import llm_gateway
+        from backend import llm_gateway
         fake = mock.Mock(client_settings=lambda: {"base_url": "https://g/anthropic", "api_key": "gk",
                                                   "headers": {"Authorization": "Bearer gk"}})
         with mock.patch.dict(os.environ, {"GROVE_BASE_URL": "https://g/anthropic"}, clear=True), \
@@ -419,7 +421,7 @@ class GatewayDestination(unittest.TestCase):
         self.assertEqual(cfg["api_key"], "gk")
 
     def test_missing_gateway_is_a_readable_sse_error(self):
-        import llm_gateway
+        from backend import llm_gateway
         msg = resilience.friendly_error(llm_gateway.GatewayNotConfigured("x"))
         self.assertIn("gateway", msg)
 

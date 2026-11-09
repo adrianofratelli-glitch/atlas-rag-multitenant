@@ -13,7 +13,7 @@ def get_client() -> Anthropic:
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from llm_gateway import gateway_settings
+    from backend.llm_gateway import gateway_settings
 
     gw = gateway_settings()
     return Anthropic(

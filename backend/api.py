@@ -32,12 +32,12 @@ from dotenv import load_dotenv
 
 from langchain_anthropic import ChatAnthropic
 
-import observability
-import telemetry
-from llm_gateway import gateway_settings
-import rag_graph
-from resilience import friendly_error
-from config import (
+from backend import observability
+from backend import telemetry
+from backend.llm_gateway import gateway_settings
+from backend import rag_graph
+from backend.resilience import friendly_error
+from backend.config import (
     CLIENT_ID,
     CLIENT_NAME,
     DOCUMENT_TITLE,
@@ -52,9 +52,9 @@ from config import (
     GRAPH_QUESTIONS,
     SYSTEM_PROMPT_EXTRA,
 )
-from agent import INJECTION_FILTER, MODEL
+from backend.agent import INJECTION_FILTER, MODEL
 from backend import documents
-from db import get_client, verify_tenant_identity
+from backend.db import get_client, verify_tenant_identity
 
 load_dotenv()
 observability.setup_logging()
@@ -88,7 +88,7 @@ def _get_llm() -> ChatAnthropic:
 #   STREAM_DEADLINE_S=N        -> total SSE generation budget in seconds (default 120; 0 = off)
 # Opt-in (network/cost or behaviour change):
 #   TRACE_SINK=console|phoenix|atlas  -> spans per RAG stage (TRACE_MASK_PII is forced to 1)
-#   RAG_REFUSE_WEAK_EVIDENCE=1        -> explicit refusal when retrieval evidence is too weak (agent.py)
+#   RAG_REFUSE_WEAK_EVIDENCE=1        -> explicit refusal when retrieval evidence is too weak (backend/agent.py)
 LLM_STREAM_MAX_ATTEMPTS = max(1, int(os.getenv("LLM_STREAM_MAX_ATTEMPTS", "3")))
 STREAM_DEADLINE_S = max(0.0, float(os.getenv("STREAM_DEADLINE_S", "120")))
 REFUSAL_MESSAGE = (
@@ -324,7 +324,7 @@ _graph_status_cache = {"ts": 0.0, "value": None}
 
 
 def get_graph_status(force: bool = False) -> dict:
-    """Metadados do último build_graph.py (`_meta.graph_build`), com cache curto."""
+    """Metadados do último backend/build_graph.py (`_meta.graph_build`), com cache curto."""
     with _graph_status_lock:
         now = time.time()
         if not force and _graph_status_cache["value"] is not None and now - _graph_status_cache["ts"] < 30:
@@ -551,7 +551,7 @@ class ChatBody(BaseModel):
     # Resolved server-side so an empty `sources` can never leak the other tab.
     scope: Literal["all", "base", "uploads"] = "all"
     # Motor de recuperação. "graph" percorre o grafo de conhecimento (kg_entities) do espaço:
-    # o do corpus base (build_graph.py; `sources` ignorado, o grafo é do corpus inteiro) ou os
+    # o do corpus base (backend/build_graph.py; `sources` ignorado, o grafo é do corpus inteiro) ou os
     # dos uploads (montados no fim de cada upload; `sources` restringe como na busca híbrida).
     engine: Literal["hybrid", "graph"] = "hybrid"
     # Trechos finais no prompt (padrão 8). Existe para o eval comparar os motores com o mesmo
@@ -731,7 +731,7 @@ def api_chat(body: ChatBody):
                 static_instructions = f"{static_instructions}\n\n{outline}"
             history = [message.model_dump() for message in body.messages]
 
-            # O grafo (rag_graph.py) roda retrieve -> (refuse | generate) numa thread
+            # O grafo (backend/rag_graph.py) roda retrieve -> (refuse | generate) numa thread
             # própria e empurra cada evento SSE numa fila — o endpoint continua uma
             # função geradora síncrona (o driver Anthropic também é síncrono aqui),
             # então é assim que o streaming token a token sobrevive à migração para

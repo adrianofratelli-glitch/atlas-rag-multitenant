@@ -1,7 +1,7 @@
 """Constrói o grafo de conhecimento do corpus base dentro do próprio banco do tenant.
 
-    ALLOW_DEMO_DB_WRITE=1 python build_graph.py            # extrai (com cache), resolve, grava, indexa
-    ALLOW_DEMO_DB_WRITE=1 python build_graph.py --refresh  # ignora o cache de extração
+    ALLOW_DEMO_DB_WRITE=1 python -m backend.build_graph            # extrai (com cache), resolve, grava, indexa
+    ALLOW_DEMO_DB_WRITE=1 python -m backend.build_graph --refresh  # ignora o cache de extração
 
 Etapas:
   1. lê os chunks do corpus base (`documents` sem `metadata.expires_at`) do tenant;
@@ -30,9 +30,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import graph_extract as gx  # noqa: E402
-from config import CLIENT_ID, DB_NAME, NATIVE_EMBED_MODEL, assert_writable_db  # noqa: E402
-from db import get_client  # noqa: E402
+from backend import graph_extract as gx  # noqa: E402
+from backend.config import CLIENT_ID, DB_NAME, NATIVE_EMBED_MODEL, assert_writable_db  # noqa: E402
+from backend.db import get_client  # noqa: E402
 
 import os  # noqa: E402
 
@@ -42,7 +42,7 @@ WORKERS = int(os.getenv("GRAPH_EXTRACT_WORKERS", "6"))
 MIN_CHUNK_CHARS = 120
 MIN_COMMUNITY_SIZE = 3
 MAX_COMMUNITIES = int(os.getenv("GRAPH_MAX_COMMUNITIES", "60"))
-CACHE_DIR = Path(__file__).resolve().parent / ".graph_cache"
+CACHE_DIR = Path(__file__).resolve().parent.parent / ".graph_cache"
 
 ENTITY_SCHEMA = {"$jsonSchema": {
     "bsonType": "object",
@@ -72,7 +72,7 @@ def log(msg: str) -> None:
 
 def _llm():
     from anthropic import Anthropic
-    from llm_gateway import gateway_settings
+    from backend.llm_gateway import gateway_settings
 
     gw = gateway_settings()
     return Anthropic(api_key=gw["api_key"], base_url=gw["base_url"], default_headers=gw["headers"],
@@ -452,7 +452,7 @@ def _save_merges(pairs) -> None:
 def merge_vetoes() -> list[tuple[str, str]]:
     """Pares que nunca se fundem, revisados por humano: `graph_merge_vetoes` no client_config.json
     (fora do git: cita nomes do corpus)."""
-    from config import _cfg
+    from backend.config import _cfg
 
     return [tuple(p) for p in _cfg.get("graph_merge_vetoes", []) if isinstance(p, list) and len(p) == 2]
 
@@ -460,7 +460,7 @@ def merge_vetoes() -> list[tuple[str, str]]:
 def build_base(db, refresh: bool = False, dedupe: bool = True) -> dict:
     chunks = load_chunks(db)
     if not chunks:
-        log("nenhum chunk do corpus base encontrado; rode ingest.py antes")
+        log("nenhum chunk do corpus base encontrado; rode backend/ingest.py antes")
         return {"ok": False}
     extractions = extract_all(chunks, refresh)
     merges = [] if refresh else _load_merges()

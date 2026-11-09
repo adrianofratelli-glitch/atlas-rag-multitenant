@@ -8,8 +8,8 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import voyageai
-from config import DB_NAME, CLIENT_ID, NATIVE_ENABLED, assert_writable_db
-from db import get_client
+from backend.config import DB_NAME, CLIENT_ID, NATIVE_ENABLED, assert_writable_db
+from backend.db import get_client
 from dotenv import load_dotenv
 
 load_dotenv()

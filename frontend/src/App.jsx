@@ -29,7 +29,7 @@ const TABS = [
     panel: {
       readOnly: true,
       title: 'Documentos',
-      emptyLabel: 'Nenhum documento de referência indexado. Rode python ingest.py <arquivo>.',
+      emptyLabel: 'Nenhum documento de referência indexado. Rode python -m backend.ingest <arquivo>.',
     },
   },
   {

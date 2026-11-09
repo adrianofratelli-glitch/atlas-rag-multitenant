@@ -12,9 +12,9 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test")
 os.environ.setdefault("CLIENT_ID", "test-tenant")
 os.environ["RAG_NATIVE"] = "0"  # estes testes cobrem o caminho clássico; não herdam a flag do .env
 
-import agent
-import resilience
-from resilience import is_transient, retry_call, stream_with_retry, friendly_error
+from backend import agent
+from backend import resilience
+from backend.resilience import is_transient, retry_call, stream_with_retry, friendly_error
 from tests.test_tenant_isolation import FakeCollection, _corpus
 
 
@@ -160,7 +160,7 @@ class GovernanceTests(unittest.TestCase):
 
 class TelemetryTests(unittest.TestCase):
     def test_noop_when_sink_off(self):
-        import telemetry
+        from backend import telemetry
         with mock.patch.dict(os.environ, {"TRACE_SINK": "off"}):
             self.assertEqual(telemetry.init(), "off")
         with telemetry.span("rag.x", client_id="t") as sp:
@@ -168,7 +168,7 @@ class TelemetryTests(unittest.TestCase):
 
     @unittest.skipUnless(importlib.util.find_spec("tracing"), "optional shared tracing package not installed; the feature fails open without it")
     def test_mask_pii_forced_when_tracing_on(self):
-        import telemetry
+        from backend import telemetry
         env = {"TRACE_SINK": "console", "TRACE_MASK_PII": "0"}
         with mock.patch.dict(os.environ, env), mock.patch("tracing.init_tracing", return_value="console"):
             telemetry.init()
@@ -176,7 +176,7 @@ class TelemetryTests(unittest.TestCase):
         telemetry._tracer = None
 
     def test_attributes_are_sanitised(self):
-        import telemetry
+        from backend import telemetry
         out = telemetry._clean({"a": 1, "b": None, "c": {"x": 1}, "d": [0.1, None, {"z": 1}], "e": []})
         self.assertEqual(out, {"a": 1, "c": "{'x': 1}", "d": [0.1]})
 

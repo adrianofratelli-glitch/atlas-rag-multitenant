@@ -22,9 +22,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from config import CLIENT_ID, DB_NAME, NATIVE_EMBED_MODEL, assert_writable_db  # noqa: E402
-from db import get_client  # noqa: E402
-import graph_retrieval as gr  # noqa: E402
+from backend.config import CLIENT_ID, DB_NAME, NATIVE_EMBED_MODEL, assert_writable_db  # noqa: E402
+from backend.db import get_client  # noqa: E402
+from backend import graph_retrieval as gr  # noqa: E402
 from scripts.graph_scale_test import generate  # noqa: E402
 
 VERBS = ["Implantar", "Modernizar", "Integrar", "Migrar", "Revisar", "Automatizar", "Contratar", "Ampliar",

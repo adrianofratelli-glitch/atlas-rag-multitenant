@@ -12,9 +12,9 @@ Critério que define "arquitetura certa" aqui: adicionar um tenant novo = novos 
 
 | Camada | Tecnologia | Onde |
 |---|---|---|
-| Banco / busca | MongoDB Atlas (Vector Search + Atlas Search/BM25) | `db.py`, `setup_db.py` |
-| Embeddings + rerank | Nativo no Atlas (`RAG_NATIVE=1`): Automated Embedding `voyage-4`, `$rankFusion`, `$rerank` `rerank-3`. Caminho clássico: VoyageAI `voyage-3` + `rerank-2` via SDK | `native_retrieval.py`, `agent.py`, `ingest.py` |
-| Geração | Claude (`claude-sonnet-4-6`) via `langchain_anthropic.ChatAnthropic`, sempre atrás de um gateway explícito: `GROVE_BASE_URL` validado pelo `grove_client` do pacote `pov-shared`, ou `ANTHROPIC_BASE_URL` declarado; sem destino padrão implícito | `llm_gateway.py`, `backend/api.py` |
+| Banco / busca | MongoDB Atlas (Vector Search + Atlas Search/BM25) | `backend/db.py`, `scripts/setup_db.py` |
+| Embeddings + rerank | Nativo no Atlas (`RAG_NATIVE=1`): Automated Embedding `voyage-4`, `$rankFusion`, `$rerank` `rerank-3`. Caminho clássico: VoyageAI `voyage-3` + `rerank-2` via SDK | `backend/native_retrieval.py`, `backend/agent.py`, `backend/ingest.py` |
+| Geração | Claude (`claude-sonnet-4-6`) via `langchain_anthropic.ChatAnthropic`, sempre atrás de um gateway explícito: `GROVE_BASE_URL` validado pelo `grove_client` do pacote `pov-shared`, ou `ANTHROPIC_BASE_URL` declarado; sem destino padrão implícito | `backend/llm_gateway.py`, `backend/api.py` |
 | API | FastAPI, streaming SSE | `backend/api.py` |
 | Frontend | React + Vite + LeafyGreen (design system MongoDB) | `frontend/src/` |
 | Deploy | container único: nginx serve o build do frontend e faz proxy de `/api` pro uvicorn | `Dockerfile`, `docker/start.sh`, `nginx.conf` |
@@ -25,7 +25,7 @@ Critério que define "arquitetura certa" aqui: adicionar um tenant novo = novos 
 Usuário digita/clica pergunta na UI
   → POST /api/chat (SSE)
   → backend/api.py resolve escopo (workspace/tenant/ACL)
-  → agent.py::retrieve_context(query)
+  → backend/agent.py::retrieve_context(query)
        Caminho nativo (RAG_NATIVE=1), um único aggregation no Atlas:
        1. $rankFusion com dois ramos: $vectorSearch (autoEmbed voyage-4: o Atlas
           embeda a pergunta) e $search (BM25), cada um filtrado por client_id +
@@ -48,7 +48,7 @@ O evento `meta` (fontes + stats do funil de recuperação) chega **antes** do pr
 
 ![Stack RAG típica, com seis sistemas e dois pipelines de sincronia, ao lado desta PoV, em que embedding, busca léxica e vetorial, fusão e rerank rodam numa aggregation em um cluster Atlas](../architecture/one-database.svg)
 
-Numa stack RAG típica, cada estágio da recuperação é um sistema à parte: o banco OLTP guarda conversas, usuários e ACL; um ETL/CDC copia os dados para um motor de busca (BM25) e para um banco vetorial; uma API de embedding é chamada a cada pergunta e a cada chunk; uma API de rerank tem chave, cota e fallback próprios; e a fusão dos rankings é código na aplicação. No caminho nativo desta PoV (`RAG_NATIVE=1`), tudo isso vira **uma aggregation** na coleção `documents` (`native_retrieval.py`), e os dados operacionais ficam no mesmo cluster:
+Numa stack RAG típica, cada estágio da recuperação é um sistema à parte: o banco OLTP guarda conversas, usuários e ACL; um ETL/CDC copia os dados para um motor de busca (BM25) e para um banco vetorial; uma API de embedding é chamada a cada pergunta e a cada chunk; uma API de rerank tem chave, cota e fallback próprios; e a fusão dos rankings é código na aplicação. No caminho nativo desta PoV (`RAG_NATIVE=1`), tudo isso vira **uma aggregation** na coleção `documents` (`backend/native_retrieval.py`), e os dados operacionais ficam no mesmo cluster:
 
 | Peça | Stack típica | Nesta PoV |
 |---|---|---|
@@ -70,22 +70,22 @@ Decisão central da PoV, e a pergunta que sempre aparece em reunião:
 - **RRF** funde os dois ranqueamentos sem precisar normalizar scores de escalas diferentes (que nem são comparáveis entre si).
 - **Rerank** é o estágio que mais melhora a resposta por token gasto — separa "8 chunks que casaram" de "os 8 chunks que respondem".
 
-As duas buscas rodam de fato em paralelo (`ThreadPoolExecutor`, uma thread para a vetorial) e **cada uma tolera a falha da outra**: se o índice vetorial cair, a lexical sozinha responde (e vice-versa), com log indicando qual caiu. O rerank também degrada: se a chamada à VoyageAI falhar, mantém a ordem do RRF. Ver `agent.py::retrieve_context` e detalhamento em `queries.md`.
+As duas buscas rodam de fato em paralelo (`ThreadPoolExecutor`, uma thread para a vetorial) e **cada uma tolera a falha da outra**: se o índice vetorial cair, a lexical sozinha responde (e vice-versa), com log indicando qual caiu. O rerank também degrada: se a chamada à VoyageAI falhar, mantém a ordem do RRF. Ver `backend/agent.py::retrieve_context` e detalhamento em `queries.md`.
 
 ## Componentes principais
 
 | Arquivo | Papel |
 |---|---|
-| `agent.py` | entrada da recuperação: caminho nativo (`native_retrieval.py`, uma aggregation) ou clássico (embedding → vector search + lexical search → RRF → rerank), filtro de prompt injection nos trechos recuperados. Chamado pelo nó `retrieve` de `rag_graph.py`. |
-| `rag_graph.py` | o turno de chat como `StateGraph` do LangGraph: `retrieve` → (`refuse` \| `generate`), checkpoint em `MongoDBSaver` (banco `rag_<CLIENT_ID>`, TTL de 30 dias) ou `MemorySaver` sem `MONGO_URI`. |
+| `backend/agent.py` | entrada da recuperação: caminho nativo (`backend/native_retrieval.py`, uma aggregation) ou clássico (embedding → vector search + lexical search → RRF → rerank), filtro de prompt injection nos trechos recuperados. Chamado pelo nó `retrieve` de `backend/rag_graph.py`. |
+| `backend/rag_graph.py` | o turno de chat como `StateGraph` do LangGraph: `retrieve` → (`refuse` \| `generate`), checkpoint em `MongoDBSaver` (banco `rag_<CLIENT_ID>`, TTL de 30 dias) ou `MemorySaver` sem `MONGO_URI`. |
 | `backend/api.py` | app FastAPI: streaming SSE do chat, montagem manual das mensagens (não usa `ChatPromptTemplate` porque contexto/histórico podem conter `{}` literais que um template interpretaria como variável), outline cacheado, endpoints de config/status/histórico/documentos. |
 | `backend/documents.py` | biblioteca de documentos: valida upload, enfileira ingestão em worker único, expõe jobs, separa os dois "workspaces" (corpus base vs. uploads de demo) via TTL, protege o corpus base contra remoção. |
-| `ingest.py` | loader multi-formato (PDF/DOCX/TXT/CSV/MD/HTML/JSON/XLSX/PPTX), chunking (`RecursiveCharacterTextSplitter`, 800/150), embedding em lotes com pausa de 22s (tier gratuito VoyageAI: 3 req/min). |
-| `db.py` | `MongoClient` singleton (pool de conexão reusado em todo o processo) + verificação de identidade do tenant no boot. |
-| `config.py` | toda a configuração de tenant vem de variáveis de ambiente (`CLIENT_ID`, `CLIENT_NAME`, etc.), sem default silencioso para `CLIENT_ID`. |
-| `setup_db_native.py` / `setup_db.py` | scripts administrativos idempotentes (nativo / clássico): coleções, índices TTL e os dois índices de busca (`vector_index`, `text_index`). Recusam banco que não termina em `_test` sem `ALLOW_DEMO_DB_WRITE=1`. |
+| `backend/ingest.py` | loader multi-formato (PDF/DOCX/TXT/CSV/MD/HTML/JSON/XLSX/PPTX), chunking (`RecursiveCharacterTextSplitter`, 800/150), embedding em lotes com pausa de 22s (tier gratuito VoyageAI: 3 req/min). |
+| `backend/db.py` | `MongoClient` singleton (pool de conexão reusado em todo o processo) + verificação de identidade do tenant no boot. |
+| `backend/config.py` | toda a configuração de tenant vem de variáveis de ambiente (`CLIENT_ID`, `CLIENT_NAME`, etc.), sem default silencioso para `CLIENT_ID`. |
+| `scripts/setup_db_native.py` / `scripts/setup_db.py` | scripts administrativos idempotentes (nativo / clássico): coleções, índices TTL e os dois índices de busca (`vector_index`, `text_index`). Recusam banco que não termina em `_test` sem `ALLOW_DEMO_DB_WRITE=1`. |
 | `scripts/reset_demo.py` | reset da demo num comando: índices, reingestão do corpus base (o Atlas regenera os embeddings via `autoEmbed`), remoção de uploads e fontes fora do corpus, limpeza de conversas e checkpoints, espera até uma consulta real devolver trechos. Mesma guarda de banco. |
-| `observability.py` | logging estruturado, request-id, `/api/metrics`, `/metrics` (Prometheus), `/api/health`. |
+| `backend/observability.py` | logging estruturado, request-id, `/api/metrics`, `/metrics` (Prometheus), `/api/health`. |
 
 ## Graph-RAG no mesmo banco (aba Graph-RAG)
 
@@ -93,8 +93,8 @@ Pergunta do cliente que motivou: "dá para fazer Graph-RAG no MongoDB?". A aba r
 
 **Evolução, não alternativa:** o motor graph roda a busca híbrida inteira dentro dele (`$unionWith documents`) e soma a camada do grafo. Comece pelo híbrido; ligue o grafo quando as perguntas forem sobre relações. O eval final (12 relacionais + 8 locais, juiz nas duas ordens) mostra o grafo vencendo com folga o híbrido padrão de 8 trechos (9/0/3) e ficando perto do híbrido com 4× mais contexto (5/4/3), com o dobro de ações e objetivos citados nas enumerações; nos fatos locais os três empatam na prática. Parte do ganho é volume de contexto; o que é só do grafo é a cobertura de relações explícitas.
 
-- **Construção (offline, `build_graph.py`):** Claude extrai entidades (unidade, ação, objetivo, sistema, norma, indicador, risco) e relações tipadas de cada chunk do corpus base, sem pessoas. `graph_extract.resolve` funde menções (nome normalizado, código, sigla: "CES" e "Coordenadoria de Engenharia de Software" viram um nó; código de ação é por plano, código de objetivo é global). Louvain (`networkx`) agrupa comunidades, e Claude resume cada uma. Tudo vai para `kg_entities` e `kg_communities` no `DB_NAME`, ao lado de `documents`.
-- **Consulta (`graph_retrieval.py`):** um aggregation em `kg_entities`: `$rankFusion` (`$vectorSearch` autoEmbed + `$search` nome/sigla/código) acha 6 entidades de entrada; `$lookup` traz o 1º salto e `$graphLookup` o 2º, sem atravessar hubs; `$lookup` em `documents` com `$rerank` traz os 8 trechos citados pelo subgrafo; `$unionWith` traz 2 sumários de comunidade.
+- **Construção (offline, `backend/build_graph.py`):** Claude extrai entidades (unidade, ação, objetivo, sistema, norma, indicador, risco) e relações tipadas de cada chunk do corpus base, sem pessoas. `graph_extract.resolve` funde menções (nome normalizado, código, sigla: "CES" e "Coordenadoria de Engenharia de Software" viram um nó; código de ação é por plano, código de objetivo é global). Louvain (`networkx`) agrupa comunidades, e Claude resume cada uma. Tudo vai para `kg_entities` e `kg_communities` no `DB_NAME`, ao lado de `documents`.
+- **Consulta (`backend/graph_retrieval.py`):** um aggregation em `kg_entities`: `$rankFusion` (`$vectorSearch` autoEmbed + `$search` nome/sigla/código) acha 6 entidades de entrada; `$lookup` traz o 1º salto e `$graphLookup` o 2º, sem atravessar hubs; `$lookup` em `documents` com `$rerank` traz os 8 trechos citados pelo subgrafo; `$unionWith` traz 2 sumários de comunidade.
 - **Prompt:** entidades do subgrafo com os documentos onde aparecem, até 120 triplas (as das entradas primeiro), temas e os trechos. O modelo é instruído a mostrar a cadeia (A → B → C) e a citar páginas só dos trechos.
 - **Onde ganha:** enumeração ("quais ações a unidade X conduz": o grafo traz todas as arestas da unidade; o híbrido traz 8 trechos), cadeias (objetivo → ações → unidades), presença em vários documentos (`sources` da entidade) e perguntas globais (comunidades). **Onde não ganha:** fato local de um trecho só (prazo de uma ação, um número): o híbrido já acerta e é mais simples.
 - **Limites declarados (também na UI):** sem algoritmos de grafo no banco; `$graphLookup` segue um campo, sem peso de aresta; grafo extraído por LLM pode errar ou faltar; a profundidade fica em 2 saltos. Grafo só do corpus base (uploads expiram e não entram).
@@ -102,13 +102,13 @@ Pergunta do cliente que motivou: "dá para fazer Graph-RAG no MongoDB?". A aba r
 
 ## O turno como grafo (LangGraph), sem agente
 
-`rag_graph.py` organiza o turno em três nós: `retrieve` (chama `agent.retrieve_context`, decide se há evidência), `refuse` (recusa sem chamar o LLM, só com `RAG_REFUSE_WEAK_EVIDENCE=1` ou sem trecho nenhum) e `generate` (stream do Claude). Não há ferramentas nem laço de raciocínio: é um pipeline fixo, por isso não existe `agent-behavior.md`. O endpoint `/api/chat` é síncrono e roda o grafo numa thread, drenando uma fila para o SSE.
+`backend/rag_graph.py` organiza o turno em três nós: `retrieve` (chama `agent.retrieve_context`, decide se há evidência), `refuse` (recusa sem chamar o LLM, só com `RAG_REFUSE_WEAK_EVIDENCE=1` ou sem trecho nenhum) e `generate` (stream do Claude). Não há ferramentas nem laço de raciocínio: é um pipeline fixo, por isso não existe `agent-behavior.md`. O endpoint `/api/chat` é síncrono e roda o grafo numa thread, drenando uma fila para o SSE.
 
 Checkpoints: `MongoDBSaver` grava em `rag_<CLIENT_ID>` (`langgraph_checkpoints`, `langgraph_checkpoint_writes`) com TTL (`CHECKPOINT_TTL_DAYS`, padrão igual a `CONVERSATION_RETENTION_DAYS`, 30). Um turno sem `thread_id` recebe uma thread própria (`anon-<uuid>`); antes todos iam para a mesma thread nula, empilhando estado de pessoas diferentes.
 
 ## Multi-tenancy
 
-Um database Atlas por tenant: `rag_<CLIENT_ID>`. `CLIENT_ID` nomeia o banco e é obrigatório — o boot falha sem ele (a menos que `ALLOW_DEFAULT_TENANT=true`, modo dev explícito). `db.py::verify_tenant_identity` grava/confere uma identidade carimbada em `_meta` para pegar um `MONGO_URI` reaproveitado de outro tenant (erro operacional plausível: `.env` copiado ou esquecido).
+Um database Atlas por tenant: `rag_<CLIENT_ID>`. `CLIENT_ID` nomeia o banco e é obrigatório — o boot falha sem ele (a menos que `ALLOW_DEFAULT_TENANT=true`, modo dev explícito). `backend/db.py::verify_tenant_identity` grava/confere uma identidade carimbada em `_meta` para pegar um `MONGO_URI` reaproveitado de outro tenant (erro operacional plausível: `.env` copiado ou esquecido).
 
 Dentro de um tenant, dois "espaços de trabalho" isolados na mesma base/coleção:
 
@@ -128,7 +128,7 @@ A fronteira entre os dois é a **presença/ausência do campo `metadata.expires_
 Duas camadas de isolamento, propositalmente redundantes:
 
 1. **Banco por tenant** — cada tenant tem seu próprio `rag_<CLIENT_ID>`. Hoje é a barreira real: não há como uma query de um tenant alcançar o banco de outro.
-2. **`metadata.client_id` como filtro obrigatório** em toda busca (`_vector_pipeline`/`_lexical_pipeline` em `agent.py`) e como campo de filtro nos dois índices Atlas Search. Hoje isso é redundante (um `client_id` por banco = sempre bate), mas vira uma segunda barreira real se a topologia migrar no futuro para banco compartilhado entre tenants. Comentário explícito no código: "defense in depth".
+2. **`metadata.client_id` como filtro obrigatório** em toda busca (`_vector_pipeline`/`_lexical_pipeline` em `backend/agent.py`) e como campo de filtro nos dois índices Atlas Search. Hoje isso é redundante (um `client_id` por banco = sempre bate), mas vira uma segunda barreira real se a topologia migrar no futuro para banco compartilhado entre tenants. Comentário explícito no código: "defense in depth".
 
 Essa camada 2 é o tipo de detalhe que vale mostrar em auditoria de segurança: o isolamento não depende de uma única garantia (banco separado), há defesa em profundidade mesmo que hoje pareça redundante.
 
@@ -156,7 +156,7 @@ Essa camada 2 é o tipo de detalhe que vale mostrar em auditoria de segurança: 
 ```bash
 ./run.sh                 # backend 127.0.0.1:8180 + frontend 127.0.0.1:5180
 ALLOW_DEMO_DB_WRITE=1 python scripts/reset_demo.py <arquivos do corpus>   # índices + corpus + embeddings
-python ingest.py <arquivo>   # ingestão avulsa via CLI (mesma guarda de banco)
+python -m backend.ingest <arquivo>   # ingestão avulsa via CLI (mesma guarda de banco)
 python -m unittest discover -s tests -v   # testes de lógica pura, sem Atlas/Voyage/Anthropic ao vivo
 ```
 

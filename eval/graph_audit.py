@@ -23,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from bench.llm import complete  # noqa: E402
-from config import CLIENT_ID, DB_NAME  # noqa: E402
-from db import get_client  # noqa: E402
+from backend.config import CLIENT_ID, DB_NAME  # noqa: E402
+from backend.db import get_client  # noqa: E402
 
 REPORTS = ROOT / "eval" / "reports"
 

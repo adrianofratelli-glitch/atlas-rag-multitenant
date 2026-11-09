@@ -1,4 +1,4 @@
-"""Unit tests for agent.py's pure aggregation-pipeline builders (no network)."""
+"""Unit tests for backend/agent.py's pure aggregation-pipeline builders (no network)."""
 
 import os
 import sys
@@ -11,7 +11,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test")
 os.environ.setdefault("CLIENT_ID", "test-tenant")
 os.environ["RAG_NATIVE"] = "0"  # estes testes cobrem o caminho clássico; não herdam a flag do .env
 
-from agent import _vector_pipeline, _lexical_pipeline, ALL_ACCESS, CLIENT_ID
+from backend.agent import _vector_pipeline, _lexical_pipeline, ALL_ACCESS, CLIENT_ID
 
 
 class TestVectorPipeline(unittest.TestCase):

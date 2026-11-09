@@ -16,8 +16,8 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test")
 os.environ.setdefault("CLIENT_ID", "test-tenant")
 os.environ["RAG_NATIVE"] = "0"  # estes testes cobrem o caminho clássico; não herdam a flag do .env
 
-import agent
-from agent import CLIENT_ID, retrieve_context
+from backend import agent
+from backend.agent import CLIENT_ID, retrieve_context
 
 FOREIGN = "outro-tenant"
 

@@ -8,7 +8,7 @@ flag) e o apaga no fim, salvo `--keep`. Não toca no banco da demo.
 
 O que mede: só a travessia (`$lookup` 1º salto + `$graphLookup` 2º salto + `$group`), com o
 mesmo formato de documento de `kg_entities` (`links`, `degree`, `relations`) e o mesmo corte de
-hubs do `graph_retrieval.py`. A busca de entrada ($vectorSearch/autoEmbed) fica de fora de
+hubs do `backend/graph_retrieval.py`. A busca de entrada ($vectorSearch/autoEmbed) fica de fora de
 propósito: embedar 1 milhão de entidades sintéticas custaria embedding sem medir nada do grafo,
 e a latência do $vectorSearch em escala já é documentada à parte. As entradas são sorteadas.
 
@@ -27,8 +27,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from config import CLIENT_ID, DB_NAME, assert_writable_db  # noqa: E402
-from db import get_client  # noqa: E402
+from backend.config import CLIENT_ID, DB_NAME, assert_writable_db  # noqa: E402
+from backend.db import get_client  # noqa: E402
 
 TYPES = ["acao"] * 5 + ["unidade", "objetivo", "sistema", "norma", "indicador"]
 RELS = ["responsavel_por", "contribui_para", "depende_de", "utiliza", "relacionado_a"]

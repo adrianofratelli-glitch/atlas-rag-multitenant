@@ -1,7 +1,10 @@
 import os
+import sys
+from pathlib import Path
 from datetime import timedelta
 from pymongo import MongoClient
-from config import DB_NAME, assert_writable_db
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # permite `python scripts/<nome>.py` de qualquer cwd
+from backend.config import DB_NAME, assert_writable_db
 from dotenv import load_dotenv
 
 load_dotenv()

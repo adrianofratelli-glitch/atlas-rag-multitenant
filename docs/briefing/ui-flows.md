@@ -25,7 +25,7 @@ Em dev, o Vite faz proxy de `/api` → `:8180`. Em produção (Docker), o nginx 
 Uma tela só (sem sidebar, sem roteamento), dividida em **três abas que nunca se misturam**:
 
 - **`Corpus de referência`** (`tab: 'base'`) — o documento do tenant, só leitura, busca híbrida.
-- **`Graph-RAG`** (`tab: 'graph'`) — o mesmo corpus base, recuperado pelo grafo de conhecimento (`engine: "graph"`). Dois modos: **Graph-RAG** (chat sobre o grafo) e **Lado a lado com o híbrido** (cada pergunta vai aos dois motores ao mesmo tempo, sem histórico, e a tela mostra as duas respostas e o que cada uma levou ao prompt). Sem o grafo construído (ou com `RAG_NATIVE=0`), a aba mostra o comando `build_graph.py`.
+- **`Graph-RAG`** (`tab: 'graph'`) — o mesmo corpus base, recuperado pelo grafo de conhecimento (`engine: "graph"`). Dois modos: **Graph-RAG** (chat sobre o grafo) e **Lado a lado com o híbrido** (cada pergunta vai aos dois motores ao mesmo tempo, sem histórico, e a tela mostra as duas respostas e o que cada uma levou ao prompt). Sem o grafo construído (ou com `RAG_NATIVE=0`), a aba mostra o comando `backend/build_graph.py`.
 - **`Novo conteúdo`** (`tab: 'uploads'`) — o que for enviado durante a demo. Uma chave **RAG híbrido / Híbrido + grafo do upload** escolhe o motor por pergunta, na mesma conversa. O grafo de cada upload é montado no fim da ingestão (fase `montando o grafo`, depois de os índices encontrarem o documento; dá para perguntar pela busca híbrida enquanto isso) e expira com o upload. O painel lateral segue o motor da última resposta.
 
 `App.jsx` monta **as três** ao mesmo tempo (e a aba Graph-RAG monta os dois modos) (`hidden` no `role="tabpanel"` da inativa) — de propósito: trocar de aba não pode matar um stream em andamento nem apagar a conversa da outra aba. "Nova conversa" (`newChat()`) remonta só a aba ativa via mudança de `key` em `WorkspaceView`, zerando thread/histórico/documentos marcados daquela aba.
@@ -57,7 +57,7 @@ Não há componentes legados: todo arquivo em `frontend/src/components/` é usad
 
 ## Por que o `EngineStrip` existe
 
-"Busca híbrida" é fácil de afirmar e difícil de provar. Com o `EngineStrip` na tela, uma pergunta com número de processo/norma mostra a contribuição lexical subindo; uma pergunta conceitual/parafraseada mostra a vetorial subindo. O argumento comercial se demonstra sozinho, sem precisar narrar. Os números vêm direto do `stats` que `agent.py::retrieve_context` devolve (ver `queries.md`).
+"Busca híbrida" é fácil de afirmar e difícil de provar. Com o `EngineStrip` na tela, uma pergunta com número de processo/norma mostra a contribuição lexical subindo; uma pergunta conceitual/parafraseada mostra a vetorial subindo. O argumento comercial se demonstra sozinho, sem precisar narrar. Os números vêm direto do `stats` que `backend/agent.py::retrieve_context` devolve (ver `queries.md`).
 
 ## Contrato de streaming (SSE)
 

@@ -4,9 +4,12 @@ Não toca em nenhum índice existente: só cria o que falta. Grava dado, então 
 de banco (`*_test`, ou ALLOW_DEMO_DB_WRITE=1 quando o banco novo é de propósito).
 """
 import os
+import sys
+from pathlib import Path
 from datetime import timedelta
 from pymongo import MongoClient
-from config import DB_NAME, NATIVE_EMBED_MODEL, assert_writable_db
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # permite `python scripts/<nome>.py` de qualquer cwd
+from backend.config import DB_NAME, NATIVE_EMBED_MODEL, assert_writable_db
 from dotenv import load_dotenv
 
 load_dotenv()

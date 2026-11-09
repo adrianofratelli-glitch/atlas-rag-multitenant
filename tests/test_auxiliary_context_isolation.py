@@ -20,7 +20,7 @@ os.environ.setdefault("CLIENT_ID", "test-tenant")
 os.environ["RAG_NATIVE"] = "0"
 
 from backend import api, documents  # noqa: E402
-from config import CLIENT_ID  # noqa: E402
+from backend.config import CLIENT_ID  # noqa: E402
 
 FOREIGN = "tenant-vizinho"
 MARKER = "COFRE_COBALTO_REGRESSAO"
@@ -214,7 +214,7 @@ class DocumentHelpersTenantScope(_Base):
         self.assertEqual([d["text"] for d in self.docs if d["metadata"]["source"] == "mesmo_nome"], ["dele"])
 
     def test_ingest_reset_is_tenant_scoped(self):
-        import ingest as ingest_mod
+        from backend import ingest as ingest_mod
         col = mock.MagicMock()
         col.count_documents.return_value = 3
         with mock.patch.object(ingest_mod, "get_client",

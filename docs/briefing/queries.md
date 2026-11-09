@@ -10,7 +10,7 @@ Total nesta versão: **9 aggregation pipelines / operações de leitura ou escri
 
 ## Pipeline nativo (RAG_NATIVE=1)
 
-**Onde:** `native_retrieval.py::build_native_pipeline`. Um único aggregation substitui as duas buscas, o RRF em Python e o rerank pelo SDK.
+**Onde:** `backend/native_retrieval.py::build_native_pipeline`. Um único aggregation substitui as duas buscas, o RRF em Python e o rerank pelo SDK.
 
 ```python
 [
@@ -32,13 +32,13 @@ Total nesta versão: **9 aggregation pipelines / operações de leitura ou escri
 ]
 ```
 
-**Índice `vector_index` do caminho nativo** (`setup_db_native.py`): `{"type": "autoEmbed", "modality": "text", "path": "text", "model": "voyage-4"}` mais os três `filter` (`nivel_acesso`, `source`, `client_id`). Não há campo `embedding` nos documentos.
+**Índice `vector_index` do caminho nativo** (`scripts/setup_db_native.py`): `{"type": "autoEmbed", "modality": "text", "path": "text", "model": "voyage-4"}` mais os três `filter` (`nivel_acesso`, `source`, `client_id`). Não há campo `embedding` nos documentos.
 
 **Observação de `scoreDetails`:** o ramo em que o chunk não apareceu vem com `rank: "NA"` e `value: 0`; só `rank` inteiro conta como acerto daquele ramo.
 
 ## Graph-RAG (aba Graph-RAG, `engine: "graph"`)
 
-**Onde:** `graph_retrieval.py::build_graph_pipeline`, chamado por `agent.py::_retrieve_graph`. Um único aggregation em `kg_entities`: acha as entidades de entrada, percorre o grafo, busca e reranqueia os trechos citados e traz os sumários de comunidade.
+**Onde:** `backend/graph_retrieval.py::build_graph_pipeline`, chamado por `backend/agent.py::_retrieve_graph`. Um único aggregation em `kg_entities`: acha as entidades de entrada, percorre o grafo, busca e reranqueia os trechos citados e traz os sumários de comunidade.
 
 ```python
 db.kg_entities.aggregate([
@@ -101,7 +101,7 @@ db.kg_entities.aggregate([
 
 **Falha:** exceção ou nenhuma entidade de entrada → `_retrieve_native` (busca híbrida) com `stats.graph_degraded = true`; a UI avisa que a resposta não veio do grafo.
 
-### Coleções e índices do grafo (`build_graph.py`)
+### Coleções e índices do grafo (`backend/build_graph.py`)
 
 | Coleção / índice | Tipo | Definição |
 |---|---|---|
@@ -127,7 +127,7 @@ db.kg_entities.aggregate([
 
 ### 1. `vector_index` — Atlas Vector Search
 
-**Onde:** `setup_db.py:47-63`
+**Onde:** `scripts/setup_db.py:50-66`
 
 ```python
 vector_def = {
@@ -149,7 +149,7 @@ docs.update_search_index("vector_index", vector_def)
 
 ### 2. `text_index` — Atlas Search (BM25 / lexical)
 
-**Onde:** `setup_db.py:66-79`
+**Onde:** `scripts/setup_db.py:69-82`
 
 ```python
 text_def = {"mappings": {"dynamic": False, "fields": {
@@ -169,7 +169,7 @@ docs.create_search_index({"name": "text_index", "type": "search", "definition": 
 
 ### 3. `updated_at_ttl` — TTL de conversas
 
-**Onde:** `setup_db.py:26-30`
+**Onde:** `scripts/setup_db.py:29-33`
 
 ```python
 db["conversations"].create_index(
@@ -183,7 +183,7 @@ db["conversations"].create_index(
 
 ### 4. `uploads_ttl` — TTL de uploads de demo
 
-**Onde:** `setup_db.py:35-39`
+**Onde:** `scripts/setup_db.py:38-42`
 
 ```python
 db["documents"].create_index(
@@ -201,7 +201,7 @@ db["documents"].create_index(
 
 ### 5. Busca vetorial — `$vectorSearch`
 
-**Onde:** `agent.py::_vector_pipeline` (linhas 58-79), executada em `agent.py::retrieve_context` (linha 142, dentro de `_run_vector`).
+**Onde:** `backend/agent.py::_vector_pipeline` (linhas 58-79), executada em `backend/agent.py::retrieve_context` (linha 142, dentro de `_run_vector`).
 
 ```python
 {"$vectorSearch": {
@@ -241,11 +241,11 @@ collection.aggregate([
 
 **Isolamento multi-tenant:** o filtro `metadata.client_id` é comentado no código como "defense in depth" — redundante hoje porque já existe um banco por tenant, mas se vira uma garantia real vale se a topologia mudar para banco compartilhado. Nunca remova esse filtro achando que é morto.
 
-**Resiliência:** se o embedding da pergunta falhar (timeout/erro da VoyageAI), essa busca é pulada inteiramente e o pipeline degrada para lexical-only (ver linha 129-133 de `agent.py`). Se a própria busca vetorial lançar exceção (índice fora, etc.), o erro é logado e o resultado tratado como lista vazia — não derruba o turno.
+**Resiliência:** se o embedding da pergunta falhar (timeout/erro da VoyageAI), essa busca é pulada inteiramente e o pipeline degrada para lexical-only (ver linha 129-133 de `backend/agent.py`). Se a própria busca vetorial lançar exceção (índice fora, etc.), o erro é logado e o resultado tratado como lista vazia — não derruba o turno.
 
 ### 6. Busca lexical — `$search` (Atlas Search / BM25)
 
-**Onde:** `agent.py::_lexical_pipeline` (linhas 82-96), executada em `agent.py::retrieve_context` (linha 149, dentro de `_run_lexical`).
+**Onde:** `backend/agent.py::_lexical_pipeline` (linhas 82-96), executada em `backend/agent.py::retrieve_context` (linha 149, dentro de `_run_lexical`).
 
 ```python
 {"$search": {
@@ -286,7 +286,7 @@ collection.aggregate([
 
 ### 7. Fusão (RRF) e rerank — não são queries MongoDB, mas fecham o pipeline
 
-**Onde:** `agent.py::retrieve_context`, linhas 154-197.
+**Onde:** `backend/agent.py::retrieve_context`, linhas 154-197.
 
 Não é uma query, é lógica Python: os resultados das duas buscas acima rodam **em paralelo** (`ThreadPoolExecutor`, 2 workers) e são fundidos por Reciprocal Rank Fusion:
 
@@ -423,11 +423,11 @@ get_client()[DB_NAME]["documents"].delete_many(
 
 ---
 
-## Ingestão (`ingest.py`) — escritas
+## Ingestão (`backend/ingest.py`) — escritas
 
 ### 13. `count_documents` — checagem de "já indexado"
 
-**Onde:** `ingest.py::ingest`
+**Onde:** `backend/ingest.py::ingest`
 
 ```python
 collection.count_documents({"metadata.client_id": CLIENT_ID, "metadata.source": source_name})
@@ -439,7 +439,7 @@ Se > 0 e `reset=False`, levanta `AlreadyIndexedError` (evita reindexar sem inten
 
 ### 14. `insert_many` — gravação dos chunks + embeddings
 
-**Onde:** `ingest.py:45` (nativo) e `ingest.py:295` (clássico)
+**Onde:** `backend/ingest.py:45` (nativo) e `backend/ingest.py:295` (clássico)
 
 ```python
 collection.insert_many(docs_to_insert)
@@ -496,11 +496,11 @@ Limita ao histórico às últimas `MAX_HISTORY_MESSAGES` (16) mensagens ao devol
 
 ---
 
-## Verificação de identidade do tenant (`db.py`)
+## Verificação de identidade do tenant (`backend/db.py`)
 
 ### 17. `find_one` + `insert_one` — write-once, verify-forever
 
-**Onde:** `db.py::verify_tenant_identity`, linhas 40-69.
+**Onde:** `backend/db.py::verify_tenant_identity`, linhas 40-69.
 
 ```python
 col = get_client()[db_name]["_meta"]
@@ -518,9 +518,9 @@ col.insert_one({"_id": "tenant_identity", "client_id": client_id})
 
 | Arquivo | O que tem lá |
 |---|---|
-| `setup_db.py` | os 4 índices (vector_index, text_index, updated_at_ttl, uploads_ttl) |
-| `agent.py` | `$vectorSearch` + `$search` (recuperação híbrida), RRF, rerank |
+| `scripts/setup_db.py` | os 4 índices (vector_index, text_index, updated_at_ttl, uploads_ttl) |
+| `backend/agent.py` | `$vectorSearch` + `$search` (recuperação híbrida), RRF, rerank |
 | `backend/api.py` | outline (`$match`+`$group`), persistência de conversa (`update_one`/`find_one`) |
 | `backend/documents.py` | listagem (`$group`+`$facet`), `distinct` de workspace, `count_documents`/`delete_many` de proteção |
-| `ingest.py` | `count_documents` de "já indexado", `delete_many` de reset, `insert_many` dos chunks |
-| `db.py` | `find_one`/`insert_one` de identidade do tenant |
+| `backend/ingest.py` | `count_documents` de "já indexado", `delete_many` de reset, `insert_many` dos chunks |
+| `backend/db.py` | `find_one`/`insert_one` de identidade do tenant |

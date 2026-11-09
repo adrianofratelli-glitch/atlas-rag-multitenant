@@ -33,10 +33,10 @@ def main():
     a = ap.parse_args()
     cache = json.loads((REPORTS / "retrieval_cache.json").read_text())
 
-    import agent
+    from backend import agent
     agent.REFUSE_WEAK_EVIDENCE = a.gate == "on"
     from backend import api
-    from config import CLIENT_NAME, DOCUMENT_TITLE, SYSTEM_PROMPT_EXTRA
+    from backend.config import CLIENT_NAME, DOCUMENT_TITLE, SYSTEM_PROMPT_EXTRA
 
     llm = api._get_llm()
     judge = judge_llm()

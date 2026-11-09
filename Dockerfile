@@ -20,8 +20,8 @@ WORKDIR /app
 COPY requirements.txt requirements-ingest.txt ./
 RUN pip install --no-cache-dir -r requirements-ingest.txt
 
-COPY *.py ./
 COPY backend/ ./backend/
+COPY scripts/ ./scripts/
 COPY --from=frontend-build /build/dist ./frontend/dist
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY docker/start.sh /start.sh

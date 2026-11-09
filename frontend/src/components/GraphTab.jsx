@@ -23,7 +23,7 @@ export default function GraphTab({ config, accessLevel, onStatusRefresh, panel }
             ? 'Construa o grafo de conhecimento do corpus de referência no mesmo banco:'
             : 'O Graph-RAG usa o caminho nativo do Atlas (RAG_NATIVE=1) e um grafo construído no mesmo banco:'}
         </p>
-        <code>ALLOW_DEMO_DB_WRITE=1 python build_graph.py</code>
+        <code>ALLOW_DEMO_DB_WRITE=1 python -m backend.build_graph</code>
       </div>
     )
   }

@@ -31,8 +31,8 @@ def _rows(path):
 def _chunk_texts(ids):
     sys.path.insert(0, str(ROOT))
     from bson import ObjectId
-    from config import CLIENT_ID, DB_NAME
-    from db import get_client
+    from backend.config import CLIENT_ID, DB_NAME
+    from backend.db import get_client
 
     coll = get_client()[DB_NAME]["documents"]
     out = {}

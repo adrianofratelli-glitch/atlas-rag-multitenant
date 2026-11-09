@@ -77,7 +77,7 @@ def judge_llm():
     """Juiz separado do gerador: temperatura 0 e saída curta."""
     from langchain_anthropic import ChatAnthropic
 
-    from llm_gateway import gateway_settings
+    from backend.llm_gateway import gateway_settings
 
     gw = gateway_settings()
     return ChatAnthropic(

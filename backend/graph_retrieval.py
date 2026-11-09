@@ -14,7 +14,7 @@ Os trechos diretos (busca híbrida comum, poucos) entram junto com os citados pe
 conjuntos disputam as vagas finais pelo score do mesmo `$rerank`: só com os trechos do subgrafo,
 um fato pontual que o grafo não modelou ("qual o prazo da ação X") virava "não encontrei".
 
-O grafo (`kg_entities`, `kg_communities`) é construído por `build_graph.py` no mesmo banco dos
+O grafo (`kg_entities`, `kg_communities`) é construído por `backend/build_graph.py` no mesmo banco dos
 chunks. Ao modelo vão três blocos: fatos do grafo (triplas com fonte), sumários de comunidade e
 os trechos originais reranqueados; só os trechos são citados como fonte.
 """
@@ -22,7 +22,7 @@ import logging
 import os
 import re
 
-from config import CLIENT_ID, NATIVE_EMBED_MODEL, NATIVE_RERANK_MODEL
+from backend.config import CLIENT_ID, NATIVE_EMBED_MODEL, NATIVE_RERANK_MODEL
 
 logger = logging.getLogger("rag_poc.graph")
 
@@ -168,7 +168,7 @@ def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=Tru
         {"$set": {"kind": "graph"}},
     ]
     if direct_k:
-        from native_retrieval import build_native_pipeline
+        from backend.native_retrieval import build_native_pipeline
 
         direct = build_native_pipeline(query, 15, access_levels, sources, direct_k, use_rerank=rerank)
         pipeline.append({"$unionWith": {"coll": "documents", "pipeline": [*direct, {"$set": {"kind": "direct"}}]}})
@@ -255,7 +255,7 @@ def merge_evidence(parsed, final_n):
 
     Cada trecho volta com `origin`: {"grafo"} e/ou os ramos da busca direta ({"vetorial", "léxico"}).
     """
-    from native_retrieval import matched_by
+    from backend.native_retrieval import matched_by
 
     merged: dict[str, dict] = {}
     for r in parsed["evidence"]:

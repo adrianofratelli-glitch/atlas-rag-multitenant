@@ -8,7 +8,7 @@ Idempotente: rodar duas vezes deixa o mesmo estado. Passos:
   1. coleções + índices (vector_index, text_index, TTLs): `setup_db_native` com RAG_NATIVE=1,
      `setup_db` no caminho clássico. Só cria o que falta.
   2. reingere cada arquivo do corpus com reset (por `metadata.source`). No nativo o Atlas gera os
-     embeddings (`autoEmbed`); no clássico o `ingest.py` chama a Voyage.
+     embeddings (`autoEmbed`); no clássico o `backend/ingest.py` chama a Voyage.
   3. remove o que não é corpus: uploads (chunks com `metadata.expires_at`) e fontes fora da lista.
   4. limpa conversas e checkpoints do LangGraph do tenant (`--keep-conversations` preserva).
   5. espera os índices responderem: uma consulta do caminho real precisa devolver trechos.
@@ -26,20 +26,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.chdir(ROOT)  # config.py lê client_config.json e o .env relativos à raiz
+os.chdir(ROOT)  # backend/config.py lê client_config.json e o .env relativos à raiz
 
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from config import CLIENT_ID, DB_NAME, NATIVE_ENABLED, assert_writable_db  # noqa: E402
+from backend.config import CLIENT_ID, DB_NAME, NATIVE_ENABLED, assert_writable_db  # noqa: E402
 
 PROBE_QUERY = os.getenv("RESET_PROBE_QUERY", "objetivos")
 
 
 def corpus_files(args_files: list[str]) -> list[Path]:
     """Arquivos do corpus base: argumentos > DEMO_CORPUS (vírgulas) > data/ (nível de cima)."""
-    from ingest import SUPPORTED_FORMATS
+    from backend.ingest import SUPPORTED_FORMATS
 
     if args_files:
         files = [Path(f) for f in args_files]
@@ -65,7 +65,7 @@ def corpus_files(args_files: list[str]) -> list[Path]:
 
 def wait_until_searchable(timeout_s: float) -> dict:
     """Consulta pelo caminho real até voltar trecho (índices prontos e embeddings em dia)."""
-    from agent import retrieve_context
+    from backend.agent import retrieve_context
 
     deadline = time.monotonic() + timeout_s
     last: dict = {}
@@ -106,13 +106,13 @@ def main() -> int:
 
     t0 = time.perf_counter()
     if NATIVE_ENABLED:
-        import setup_db_native as setup_mod
+        from scripts import setup_db_native as setup_mod
     else:
-        import setup_db as setup_mod
+        from scripts import setup_db as setup_mod
     setup_mod.setup()
 
-    from db import get_client, verify_tenant_identity
-    from ingest import ingest
+    from backend.db import get_client, verify_tenant_identity
+    from backend.ingest import ingest
 
     client = get_client()
     verify_tenant_identity(DB_NAME, CLIENT_ID)
@@ -131,7 +131,7 @@ def main() -> int:
     print(f"removidos: {uploads} chunks de upload, {strays} chunks de fontes fora do corpus")
 
     if not args.keep_conversations:
-        from rag_graph import checkpoint_db_name
+        from backend.rag_graph import checkpoint_db_name
 
         conv = client[DB_NAME]["conversations"].delete_many({}).deleted_count
         ck_db = client[checkpoint_db_name()]
@@ -143,7 +143,7 @@ def main() -> int:
     # sem reconstruir, o Graph-RAG acharia entidades mas nenhum trecho. A extração tem cache por
     # texto do chunk, então reconstruir não chama o LLM para trechos que não mudaram.
     if NATIVE_ENABLED and not args.skip_graph and "kg_entities" in client[DB_NAME].list_collection_names():
-        import build_graph
+        from backend import build_graph
 
         print("reconstruindo o grafo do Graph-RAG (cache de extração local)...")
         if build_graph.main([]) != 0:

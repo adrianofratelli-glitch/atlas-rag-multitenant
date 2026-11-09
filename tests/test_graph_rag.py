@@ -15,9 +15,9 @@ os.environ.setdefault("VOYAGE_API_KEY", "test")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test")
 os.environ.setdefault("CLIENT_ID", "test-tenant")
 
-import graph_extract as gx  # noqa: E402
-import graph_retrieval as gr  # noqa: E402
-from config import CLIENT_ID  # noqa: E402
+from backend import graph_extract as gx  # noqa: E402
+from backend import graph_retrieval as gr  # noqa: E402
+from backend.config import CLIENT_ID  # noqa: E402
 
 
 def _mention(name, etype, sigla="", code="", description=""):
@@ -357,7 +357,7 @@ class TestParseGraph(unittest.TestCase):
 
 class TestAgentGraphEngine(unittest.TestCase):
     def setUp(self):
-        import agent
+        from backend import agent
         self.agent = agent
 
     def test_graph_context_has_facts_and_chunks(self):
@@ -407,7 +407,7 @@ _API_SCRIPT = """
     import sys, json
     from unittest.mock import patch, MagicMock
     sys.path.insert(0, ".")
-    import db
+    from backend import db
     with patch.object(db, "get_client", return_value=MagicMock()), \\
          patch.object(db, "verify_tenant_identity", return_value=None):
         import backend.api as api
@@ -436,8 +436,8 @@ _API_SCRIPT = """
              patch.object(api, "get_status", return_value=(True, 1)), \\
              patch.object(api, "_get_document_outline", return_value=""), \\
              patch.object(api.documents, "sources_for_scope", fake_scope), \\
-             patch("rag_graph.retrieve_context", fake_retrieve), \\
-             patch("rag_graph.insufficient_evidence", return_value=False):
+             patch("backend.rag_graph.retrieve_context", fake_retrieve), \\
+             patch("backend.rag_graph.insufficient_evidence", return_value=False):
             client = TestClient(api.app)
             resp = client.post("/api/chat", json=BODY)
             print(json.dumps({"status": resp.status_code, "seen": seen,

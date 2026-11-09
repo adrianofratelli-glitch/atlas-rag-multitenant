@@ -1,6 +1,6 @@
 """Grafo de conhecimento do corpus: prompt de extração, parsing e resolução de entidades.
 
-Lógica pura (sem rede, sem banco): `build_graph.py` chama o LLM pelo gateway, passa a
+Lógica pura (sem rede, sem banco): `backend/build_graph.py` chama o LLM pelo gateway, passa a
 resposta por `parse_extraction` e monta o grafo com `resolve`. Os testes exercitam tudo
 daqui sem Atlas nem Grove.
 

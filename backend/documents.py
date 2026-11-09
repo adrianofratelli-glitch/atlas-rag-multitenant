@@ -19,9 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
-from config import CLIENT_ID, DB_NAME, NATIVE_EMBED_MODEL, NATIVE_ENABLED
-from db import get_client
-from ingest import SUPPORTED_FORMATS, AlreadyIndexedError, ingest
+from backend.config import CLIENT_ID, DB_NAME, NATIVE_EMBED_MODEL, NATIVE_ENABLED
+from backend.db import get_client
+from backend.ingest import SUPPORTED_FORMATS, AlreadyIndexedError, ingest
 
 logger = logging.getLogger("rag_poc.documents")
 
@@ -226,7 +226,7 @@ def _build_upload_graph(job_id: str, source: str, searchable: bool) -> dict:
     híbrida enquanto o grafo é montado."""
     _update(job_id, phase="graph", searchable=searchable, graph_done=0, graph_total=0)
     try:
-        import build_graph
+        from backend import build_graph
 
         return build_graph.build_upload_graph(
             get_client()[DB_NAME], source,
@@ -238,7 +238,7 @@ def _build_upload_graph(job_id: str, source: str, searchable: bool) -> dict:
 
 def delete_upload_graph(source: str) -> int:
     try:
-        import build_graph
+        from backend import build_graph
 
         return build_graph.delete_upload_graph(get_client()[DB_NAME], source)
     except Exception:  # noqa: BLE001 — o TTL ainda varre o que sobrar
