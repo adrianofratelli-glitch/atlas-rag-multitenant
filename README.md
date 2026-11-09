@@ -6,6 +6,8 @@ Tenant-agnostic by design: no customer, document, or brand name lives in the rep
 
 The UI is in Brazilian Portuguese (used in customer sessions); code and this README are in English, and the briefing documents under `docs/briefing/` are in Portuguese.
 
+Mapa do código: [docs/MAPA_DO_CODIGO.md](docs/MAPA_DO_CODIGO.md)
+
 ## The demo in five steps
 
 **1. Pick a tab, an access profile, and a question.** The **Reference corpus** tab talks to the tenant's document; **New content** is the space for whatever is uploaded on the spot. The profile (public / restricted) is the ACL filter applied to *both* search stages, default-deny.
