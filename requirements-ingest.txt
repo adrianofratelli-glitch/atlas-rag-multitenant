@@ -8,6 +8,9 @@ beautifulsoup4>=4.12,<5
 openpyxl>=3.1,<4
 python-pptx>=1.0,<2
 
+# Graph-RAG offline build (backend/build_graph.py: comunidades via Louvain).
+networkx>=3.4,<4
+
 # Document loaders used by backend/ingest.py (PDF/DOCX/TXT/CSV/HTML) and bench/corpus_stats.py.
 langchain-community>=0.4,<0.5
 
