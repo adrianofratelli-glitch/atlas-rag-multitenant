@@ -1,6 +1,6 @@
 # Mapa do código — atlas-rag-multitenant
 
-> Também conhecida como: TJGO (RAG multi-tenant, aba Graph-RAG). Portas: frontend 5180 / backend 8180. Em uma frase: perguntas em linguagem natural sobre documentos longos, respondidas com citações, onde busca vetorial, lexical, fusão e rerank rodam num único aggregation do Atlas (e, na aba Graph-RAG, o mesmo aggregation também percorre um grafo de conhecimento guardado no MongoDB).
+> Também conhecida como: RAG multi-tenant (aba Graph-RAG). Portas: frontend 5180 / backend 8180. Em uma frase: perguntas em linguagem natural sobre documentos longos, respondidas com citações, onde busca vetorial, lexical, fusão e rerank rodam num único aggregation do Atlas (e, na aba Graph-RAG, o mesmo aggregation também percorre um grafo de conhecimento guardado no MongoDB).
 
 Os caminhos abaixo são relativos à raiz do repositório. Complementos: [architecture](briefing/architecture.md), [queries](briefing/queries.md), [ui-flows](briefing/ui-flows.md).
 
