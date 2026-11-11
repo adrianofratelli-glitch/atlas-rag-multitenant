@@ -324,7 +324,7 @@ MIT, see [LICENSE](LICENSE).
 ## Docker
 
 ```bash
-docker build -t atlas-rag-multitenant .
+docker build --build-context shared=../_shared -t atlas-rag-multitenant .
 docker run --env-file .env -p 18084:8080 atlas-rag-multitenant   # nginx + uvicorn no mesmo container
 ```
 

@@ -19,6 +19,10 @@ WORKDIR /app
 # demo runs the same pipeline as the CLI, inside this container.
 COPY requirements.txt requirements-ingest.txt ./
 RUN pip install --no-cache-dir -r requirements-ingest.txt
+# pov-shared (grove_client: LLM só via gateway Grove) vem de um contexto nomeado:
+#   docker build --build-context shared=../_shared -t atlas-rag-multitenant .
+COPY --from=shared . /opt/pov-shared
+RUN pip install --no-cache-dir "/opt/pov-shared[llm]"
 
 COPY backend/ ./backend/
 COPY scripts/ ./scripts/
