@@ -4,7 +4,8 @@ import { fileURLToPath, URL } from 'node:url'
 
 const apiProxy = {
   '/api': {
-    target: 'http://localhost:8180',
+    // RAG_API_URL: backend em outra porta (teste ao vivo sem ocupar a porta da demo).
+    target: process.env.RAG_API_URL || 'http://localhost:8180',
     changeOrigin: true,
   },
 }
