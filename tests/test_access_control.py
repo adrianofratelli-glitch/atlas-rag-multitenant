@@ -234,7 +234,11 @@ class GraphAclTests(unittest.TestCase):
         with mock.patch.object(documents, "denied_sources", return_value=["R"]) as ds:
             _, pipeline = graph_retrieval.run_graph(db, "q", access_levels=["publico"])
         ds.assert_called_once_with(["publico"])
-        self.assertIn('"$nin": ["R"]', json.dumps(pipeline))
+        executed = db["kg_entities"].aggregate.call_args[0][0]
+        self.assertIn('"$nin": ["R"]', json.dumps(executed))
+        # O pipeline exibido na UI não revela o nome do documento negado.
+        self.assertNotIn('"R"', json.dumps(pipeline))
+        self.assertIn("1 documento(s) fora do perfil", json.dumps(pipeline))
 
 
 class RetrieveContextDefaultDeny(unittest.TestCase):

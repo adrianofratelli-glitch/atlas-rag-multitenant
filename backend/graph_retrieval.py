@@ -378,4 +378,25 @@ def run_graph(db, query, *, final_n=8, rerank=True, access_levels=None, sources=
                                     access_levels=access_levels, sources=sources, scope=scope,
                                     denied_sources=denied)
     rows = list(db["kg_entities"].aggregate(pipeline))
-    return parse_graph_rows(rows), pipeline
+    return parse_graph_rows(rows), redact_denied(pipeline, denied)
+
+
+def redact_denied(pipeline, denied):
+    """Cópia do pipeline para exibição (painel da query), sem os nomes dos documentos negados.
+
+    O filtro `$nin` executado leva os nomes reais; mostrados na UI, revelariam ao perfil público
+    o nome de um documento restrito (achado do eval de isolamento). A estrutura fica igual: só a
+    lista vira um marcador com a contagem.
+    """
+    if not denied:
+        return pipeline
+    target = sorted(set(denied))
+    marker = [f"<{len(target)} documento(s) fora do perfil>"]
+
+    def walk(node):
+        if isinstance(node, dict):
+            return {k: walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return marker if all(isinstance(x, str) for x in node) and sorted(node) == target else [walk(x) for x in node]
+        return node
+    return walk(pipeline)
