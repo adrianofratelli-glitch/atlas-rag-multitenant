@@ -172,7 +172,9 @@ def retrieve_context(query: str, top_k: int = 15,
     if any(p in query.lower() for p in history_phrases):
         return "Responda com base no histórico da conversa.", [], {}
 
-    levels = access_levels if access_levels else ALL_ACCESS
+    # None = chamada interna (eval) sem perfil: acesso total. Lista vazia NÃO é "tudo":
+    # antes de 2026-11-12 `[]` caía em ALL_ACCESS (falha aberta); agora vira só público.
+    levels = ALL_ACCESS if access_levels is None else (list(access_levels) or ["publico"])
     if engine == "graph":
         with telemetry.span("rag.retrieve.graph", client_id=CLIENT_ID, final_n=final_n) as root:
             result = _retrieve_graph(query, levels, sources, final_n, top_k, _capture, graph_scope)

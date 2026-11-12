@@ -61,7 +61,13 @@ def _ids_of(array_expr, field, per_item):
 
 def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=True,
                          communities_k=COMMUNITIES_K, direct_k=DIRECT_CHUNKS,
-                         access_levels=None, sources=None, scope="base"):
+                         access_levels=None, sources=None, scope="base", denied_sources=None):
+    # ACL no grafo (falha fechada): entidade cujo `sources` cita documento com trecho fora do
+    # perfil (`denied_sources`) não entra nem como ponto de entrada nem como vizinho, e todo
+    # trecho de evidência passa pelo mesmo filtro `metadata.nivel_acesso` da busca híbrida.
+    # Antes de 2026-11-12 a evidência do grafo não filtrava nível: um upload restrito vazava
+    # para o perfil público pela aba Graph-RAG (medido em scripts/isolation_eval.py).
+    denied = sorted(set(denied_sources or []))
     # `scope` separa o grafo do corpus base ("base") do grafo dos uploads ("uploads"), pela
     # mesma regra das abas: tenant + escopo em todo estágio que lê entidade ou chunk.
     uploads = scope == "uploads"
@@ -71,8 +77,16 @@ def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=Tru
     if uploads and sources:
         vs_filter["sources"] = {"$in": list(sources)}
         lex_filter.append({"in": {"path": "sources", "value": list(sources)}})
-    if uploads:
-        communities_k = 0  # comunidades só existem para o corpus base
+    entity_match = {"client_id": CLIENT_ID, "scope": scope}
+    lex_must_not = []
+    if denied:
+        vs_filter = {"$and": [vs_filter, {"sources": {"$nin": denied}}]}
+        lex_must_not = [{"in": {"path": "sources", "value": denied}}]
+        entity_match["sources"] = {"$nin": denied}
+    if uploads or denied:
+        # Comunidades só existem para o corpus base; com documento negado no perfil, o sumário
+        # de comunidade (texto gerado sobre várias entidades) pode citar o restrito: sai inteiro.
+        communities_k = 0
     entry = {"$rankFusion": {"input": {"pipelines": {
         "vector": [{"$vectorSearch": {
             "index": "kg_vector_index", "path": "text", "query": query, "model": NATIVE_EMBED_MODEL,
@@ -87,7 +101,8 @@ def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=Tru
                     *([{"in": {"path": "code", "value": query_codes(query), "score": {"constant": {"value": 100}}}}]
                       if query_codes(query) else []),
                 ],
-                "minimumShouldMatch": 1, "filter": lex_filter}}},
+                "minimumShouldMatch": 1, "filter": lex_filter,
+                **({"mustNot": lex_must_not} if lex_must_not else {})}}},
             {"$limit": SEED_BRANCH_K},
         ],
     }}, "scoreDetails": True}}
@@ -119,6 +134,8 @@ def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=Tru
 
     evidence_match = {"$expr": {"$in": ["$_id", "$$ids"]}, "metadata.client_id": CLIENT_ID,
                       "metadata.expires_at": {"$exists": uploads}}
+    if access_levels:
+        evidence_match["metadata.nivel_acesso"] = {"$in": list(access_levels)}
     if uploads and sources:
         evidence_match["metadata.source"] = {"$in": list(sources)}
     evidence_pipeline = [
@@ -139,7 +156,7 @@ def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=Tru
         {"$set": {"seed_score": {"$meta": "score"}, "score_details": {"$meta": "scoreDetails"}}},
         # 1º salto: todos os vizinhos diretos, inclusive hubs (um objetivo citado por cem ações).
         {"$lookup": {"from": "kg_entities", "localField": "links", "foreignField": "_id", "as": "hop1",
-                     "pipeline": [{"$match": {"client_id": CLIENT_ID, "scope": scope}}, {"$project": compact}]}},
+                     "pipeline": [{"$match": entity_match}, {"$project": compact}]}},
         *([
             # Saltos seguintes: recursivo, mas sem atravessar hubs, ou dois saltos a partir de
             # qualquer ação chegariam a quase o grafo inteiro.
@@ -150,7 +167,7 @@ def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=Tru
                     "initialValue": [], "in": {"$concatArrays": ["$$value", "$$this.links"]}}},
                 "connectFromField": "links", "connectToField": "_id", "as": "hop2",
                 "maxDepth": hops - 2, "depthField": "hop",
-                "restrictSearchWithMatch": {"client_id": CLIENT_ID, "scope": scope, "degree": {"$lte": HUB_DEGREE}},
+                "restrictSearchWithMatch": {**entity_match, "degree": {"$lte": HUB_DEGREE}},
             }},
         ] if hops > 1 else []),
         {"$project": {**ENTITY_FIELDS, "seed_score": 1, "score_details": 1,
@@ -354,7 +371,11 @@ def draw_view(parsed, max_nodes=MAX_DRAW_NODES):
 
 def run_graph(db, query, *, final_n=8, rerank=True, access_levels=None, sources=None, scope="base"):
     """Executa o aggregation. Levanta em falha: o chamador decide a degradação."""
+    from backend import documents
+
+    denied = documents.denied_sources(access_levels) if access_levels else []
     pipeline = build_graph_pipeline(query, final_n=final_n, rerank=rerank,
-                                    access_levels=access_levels, sources=sources, scope=scope)
+                                    access_levels=access_levels, sources=sources, scope=scope,
+                                    denied_sources=denied)
     rows = list(db["kg_entities"].aggregate(pipeline))
     return parse_graph_rows(rows), pipeline

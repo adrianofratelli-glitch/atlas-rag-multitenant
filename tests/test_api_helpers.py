@@ -49,8 +49,9 @@ class TestLevelsFor(unittest.TestCase):
         self.assertEqual(_levels_for("qualquer-coisa"), ["publico"])
         self.assertEqual(_levels_for(""), ["publico"])
 
-    def test_chat_body_defaults_to_public_only(self):
-        self.assertEqual(ChatBody(question="teste").access_level, "publico")
+    def test_chat_body_has_no_access_level_by_default(self):
+        """Sem pedido do cliente, vale o perfil do token (sem token = só público, ver test_auth)."""
+        self.assertIsNone(ChatBody(question="teste").access_level)
 
     def test_chat_body_rejects_oversized_total_history(self):
         with self.assertRaises(ValidationError):

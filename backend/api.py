@@ -23,7 +23,7 @@ from uuid import uuid4
 from uuid import UUID
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 
 from langchain_anthropic import ChatAnthropic
 
+from backend import auth
 from backend import observability
 from backend import telemetry
 from backend.llm_gateway import gateway_settings
@@ -123,7 +124,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -469,21 +470,48 @@ def _track_usage(chunk_agg) -> None:
 
 # Access control: map an access profile to the allowed levels.
 # Default-deny: only the exact value "restrito" unlocks restricted content —
-# any other/unknown value from the client falls back to public-only.
+# any other/unknown value falls back to public-only. The profile itself is decided
+# server-side (`_granted_level`, backend/auth.py), never taken from the request body.
 def _levels_for(access_level: str) -> list:
-    return ["publico", "restrito"] if access_level == "restrito" else ["publico"]
+    return auth.levels_for(access_level)
+
+
+def _granted_level(authorization: str | None) -> str:
+    """Nível concedido pelo token da requisição; token inválido/expirado/de outro tenant -> 401."""
+    try:
+        return auth.granted_level(authorization, CLIENT_ID)
+    except auth.AuthError as e:
+        observability.metrics.bump("auth_rejected", 1)
+        raise HTTPException(status_code=401, detail=f"token de acesso recusado: {e}",
+                            headers={"WWW-Authenticate": "Bearer"})
 
 
 # Conversation memory persisted in MongoDB (same platform as the vectors)
-def _save_conversation(thread_id, messages):
+# Each conversation is stamped with the tenant and the access level it was produced
+# under: reading it back requires the same tenant and at least that level (a public
+# caller holding the thread_id of a restricted conversation gets 404, not the answers).
+def _conversation_filter(thread_id):
+    # `None` também casa documento legado sem o campo (banco do próprio tenant, `_meta` carimbado).
+    return {"_id": thread_id, "client_id": {"$in": [CLIENT_ID, None]}}
+
+
+def _save_conversation(thread_id, messages, access_level="publico"):
     if not thread_id:
         return
     from datetime import datetime, timezone
     try:
-        get_client()[DB_NAME]["conversations"].update_one(
-            {"_id": thread_id},
+        col = get_client()[DB_NAME]["conversations"]
+        prev = col.find_one(_conversation_filter(thread_id), {"access_level": 1})
+        if prev is not None and not auth.can_read(access_level, prev.get("access_level")):
+            # Thread produzida num nível acima do atual: não sobrescreve a conversa de outro perfil.
+            logger.warning("conversation not saved: level below thread level thread_id=%s", thread_id)
+            return
+        col.update_one(
+            _conversation_filter(thread_id),
             {"$set": {
                 "client": CLIENT_NAME,
+                "client_id": CLIENT_ID,
+                "access_level": access_level,
                 "document": DOCUMENT_TITLE,
                 "messages": messages,
                 "updated_at": datetime.now(timezone.utc),
@@ -494,10 +522,10 @@ def _save_conversation(thread_id, messages):
         logger.exception("conversation persistence failed thread_id=%s", thread_id)  # must never break the chat
 
 
-def _load_conversation(thread_id):
+def _load_conversation(thread_id, granted="publico"):
     try:
-        doc = get_client()[DB_NAME]["conversations"].find_one({"_id": thread_id})
-        if not doc:
+        doc = get_client()[DB_NAME]["conversations"].find_one(_conversation_filter(thread_id))
+        if not doc or not auth.can_read(granted, doc.get("access_level")):
             return []
         return [{"role": m.get("role"), "content": m.get("content")}
                 for m in doc.get("messages", [])[-MAX_HISTORY_MESSAGES:]]
@@ -526,7 +554,34 @@ def api_config():
         "supported_formats": sorted(documents.SUPPORTED_FORMATS),
         "graph": get_graph_status() if NATIVE_ENABLED else {"ready": False},
         "graph_questions": [_clean(q) for q in GRAPH_QUESTIONS[:8]],
+        # O perfil de acesso é decidido no servidor (token); `demo_login` diz se esta instância
+        # emite tokens de demonstração em /api/session (produção: RAG_DEMO_LOGIN=0 + IdP).
+        "auth": {"demo_login": auth.DEMO_LOGIN, "levels": list(auth.LEVELS)},
     }
+
+
+class SessionBody(BaseModel):
+    level: Literal["publico", "restrito"] = "publico"
+
+
+@app.post("/api/session")
+def api_session(body: SessionBody):
+    """Emissor de demonstração: devolve um token assinado para o perfil pedido.
+
+    Substitui o antigo `access_level` livre no corpo do chat: o chat passa a confiar só no
+    token verificado. Em produção desligue (`RAG_DEMO_LOGIN=0`) e emita o token no IdP.
+    """
+    if not auth.DEMO_LOGIN:
+        raise HTTPException(status_code=404, detail="emissor de demonstração desligado")
+    token = auth.issue_token(CLIENT_ID, body.level)
+    observability.metrics.bump("auth_demo_tokens", 1)
+    return {"token": token, "level": body.level, "expires_in": auth.TOKEN_TTL_S}
+
+
+@app.get("/api/session")
+def api_whoami(authorization: str | None = Header(default=None)):
+    level = _granted_level(authorization)
+    return {"level": level, "levels": _levels_for(level)}
 
 
 @app.get("/api/status")
@@ -544,7 +599,8 @@ class ChatBody(BaseModel):
     question: str = Field(..., min_length=1, max_length=MAX_QUESTION_LENGTH)
     messages: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_MESSAGES)
     thread_id: UUID | None = None
-    access_level: Literal["publico", "restrito"] = "publico"
+    # Pedido do cliente: só REDUZ o perfil concedido pelo token (ver backend/auth.py). Ausente = o do token.
+    access_level: Literal["publico", "restrito"] | None = None
     # Empty/absent means "every indexed document"; otherwise retrieval is scoped
     # to these metadata.source values (the documents picked in the UI).
     sources: list[Annotated[str, StringConstraints(min_length=1, max_length=200)]] = Field(
@@ -569,21 +625,23 @@ class ChatBody(BaseModel):
 
 
 @app.get("/api/history/{thread_id}")
-def api_history(thread_id: UUID):
-    """Resume a conversation persisted in MongoDB."""
-    return {"thread_id": str(thread_id), "messages": _load_conversation(str(thread_id))}
+def api_history(thread_id: UUID, authorization: str | None = Header(default=None)):
+    """Resume a conversation persisted in MongoDB (same tenant, level >= the thread's)."""
+    granted = _granted_level(authorization)
+    return {"thread_id": str(thread_id), "messages": _load_conversation(str(thread_id), granted)}
 
 
 # Document library: list, upload (queued ingestion), poll a job, delete
 @app.get("/api/documents")
-def api_documents():
+def api_documents(authorization: str | None = Header(default=None)):
     """Every document indexed in the tenant DB + the currently known jobs.
 
     `truncated`/`total` let the UI warn when the tenant has more documents
     than the listing shows (see documents.DOCUMENTS_LIST_LIMIT).
     """
+    levels = _levels_for(_granted_level(authorization))
     try:
-        listing = documents.list_documents()
+        listing = documents.list_documents(levels)
     except Exception:
         logger.exception("document listing failed")
         raise HTTPException(status_code=503, detail="não foi possível listar os documentos")
@@ -600,6 +658,7 @@ async def api_upload_document(
     file: UploadFile = File(...),
     nivel_acesso: Literal["publico", "restrito"] = Form("publico"),
     reset: bool = Form(False),
+    authorization: str | None = Header(default=None),
 ):
     """Accept a document and queue it for the same pipeline the CLI runs.
 
@@ -608,6 +667,9 @@ async def api_upload_document(
     """
     # Read at most limit+1 bytes: an oversized upload is rejected without loading it whole
     # into memory (the Content-Length guard in the middleware stops most of them earlier).
+    if nivel_acesso not in _levels_for(_granted_level(authorization)):
+        # Gravar conteúdo restrito exige o mesmo perfil que lê-lo.
+        raise HTTPException(status_code=403, detail="enviar documento restrito exige perfil restrito")
     content = await file.read(documents.MAX_UPLOAD_BYTES + 1)
     try:
         job = documents.start_ingestion(
@@ -650,8 +712,12 @@ def api_delete_document(source: str):
 
 
 @app.post("/api/chat")
-def api_chat(body: ChatBody):
+def api_chat(body: ChatBody, authorization: str | None = Header(default=None)):
     """SSE stream of {type: meta|token|done|error} events."""
+
+    # O perfil vem do token verificado; `access_level` do corpo só pode reduzi-lo.
+    access_level = auth.effective_level(_granted_level(authorization), body.access_level)
+    levels = _levels_for(access_level)
 
     question = body.question.strip()
     if not question:
@@ -667,7 +733,7 @@ def api_chat(body: ChatBody):
     if graph_engine and body.scope != "uploads":
         body = body.model_copy(update={"scope": "base", "sources": []})
     try:
-        workspace_sources = documents.sources_for_scope(body.scope)
+        workspace_sources = documents.sources_for_scope(body.scope, levels)
     except Exception:
         logger.exception("workspace scope resolution failed scope=%s", body.scope)
         raise HTTPException(status_code=503, detail="não foi possível resolver o escopo do workspace")
@@ -729,7 +795,7 @@ def api_chat(body: ChatBody):
                 document_title=scope_title, client_name=CLIENT_NAME,
                 extra=SYSTEM_PROMPT_EXTRA + (GRAPH_PROMPT_EXTRA if graph_engine else ""),
             )
-            outline = _get_document_outline(_levels_for(body.access_level), effective_sources)
+            outline = _get_document_outline(levels, effective_sources)
             if outline:
                 static_instructions = f"{static_instructions}\n\n{outline}"
             history = [message.model_dump() for message in body.messages]
@@ -751,7 +817,7 @@ def api_chat(body: ChatBody):
             def _worker():
                 try:
                     final_state = rag_graph.run_turn(
-                        question=question, access_levels=_levels_for(body.access_level),
+                        question=question, access_levels=levels,
                         sources=effective_sources, history=history,
                         static_instructions=static_instructions, llm=_get_llm(),
                         client_id=CLIENT_ID, model_name=MODEL,
@@ -796,6 +862,7 @@ def api_chat(body: ChatBody):
                 str(body.thread_id) if body.thread_id else None,
                 history + [{"role": "user", "content": question},
                            {"role": "assistant", "content": final_state.get("full_response", "")}],
+                access_level,
             )
         except Exception as e:  # noqa: BLE001
             logger.exception("chat turn failed thread_id=%s", body.thread_id)

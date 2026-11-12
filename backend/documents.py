@@ -121,7 +121,7 @@ def validate_size(size: int) -> None:
 DOCUMENTS_LIST_LIMIT = 200
 
 
-def list_documents() -> dict:
+def list_documents(levels: list[str] | None = None) -> dict:
     """Every indexed document in the tenant DB, with its chunk count.
 
     Returns {"documents": [...], "truncated": bool, "total": int}. Fetches one
@@ -129,6 +129,9 @@ def list_documents() -> dict:
     `total` is exact (one extra $group is cheap relative to the aggregation
     already run) so the UI can tell the user how many documents exist beyond
     what's shown, not just that some were cut.
+
+    `levels` (perfil do chamador): documento com algum trecho fora desses níveis some da
+    lista — um perfil público não fica sabendo nem o nome de um documento restrito.
     """
     pipeline = [
         {"$match": tenant_filter()},
@@ -141,6 +144,7 @@ def list_documents() -> dict:
             "nivel_acesso": {"$addToSet": "$metadata.nivel_acesso"},
         }},
         {"$match": {"_id": {"$ne": None}}},
+        *([{"$match": {"nivel_acesso": {"$not": {"$elemMatch": {"$nin": list(levels)}}}}}] if levels else []),
         {"$facet": {
             "page": [{"$sort": {"_id": 1}}, {"$limit": DOCUMENTS_LIST_LIMIT}],
             "count": [{"$count": "n"}],
@@ -177,27 +181,55 @@ _scope_cache: dict[tuple, dict] = {}
 _SCOPE_CACHE_TTL_S = 3600
 
 
-def sources_for_scope(scope: str) -> list[str] | None:
+def sources_for_scope(scope: str, levels: list[str] | None = None) -> list[str] | None:
     """Document names belonging to one workspace.
 
     Both workspaces live in the same tenant DB and are told apart by the TTL
     stamp: the CLI-ingested reference corpus carries no `metadata.expires_at`,
     every UI upload carries one. `"all"` returns None — do not scope retrieval.
     Cached by (corpus_version, scope) so a busy chat doesn't re-run `distinct`
-    on every turn.
+    on every turn. `levels` restringe aos documentos com algum trecho legível pelo perfil.
     """
     if scope == "all":
         return None
-    key = (CLIENT_ID, corpus_version, scope)
+    key = (CLIENT_ID, corpus_version, scope, tuple(sorted(levels or [])))
     with _scope_cache_lock:
         entry = _scope_cache.get(key)
         now = time.time()
         if entry and now - entry["ts"] < _SCOPE_CACHE_TTL_S:
             return entry["value"]
     exists = scope == "uploads"
+    extra = {"metadata.expires_at": {"$exists": exists}}
+    if levels:
+        extra["metadata.nivel_acesso"] = {"$in": list(levels)}
+    value = sorted(
+        s for s in get_client()[DB_NAME]["documents"].distinct("metadata.source", tenant_filter(extra)) if s
+    )
+    with _scope_cache_lock:
+        if len(_scope_cache) >= 16:
+            _scope_cache.clear()
+        _scope_cache[key] = {"ts": now, "value": value}
+    return value
+
+
+def denied_sources(levels: list[str] | None) -> list[str]:
+    """Documentos do tenant com algum trecho FORA de `levels` (cache por corpus_version).
+
+    O grafo não guarda nível por entidade: uma entidade cujo `sources` cita um desses
+    documentos pode ter nome, descrição ou relação tirados de texto restrito. O Graph-RAG
+    exclui essas entidades (falha fechada) — ver backend/graph_retrieval.py.
+    """
+    if not levels:
+        return []
+    key = (CLIENT_ID, corpus_version, "denied", tuple(sorted(levels)))
+    with _scope_cache_lock:
+        entry = _scope_cache.get(key)
+        now = time.time()
+        if entry and now - entry["ts"] < _SCOPE_CACHE_TTL_S:
+            return entry["value"]
     value = sorted(
         s for s in get_client()[DB_NAME]["documents"].distinct(
-            "metadata.source", tenant_filter({"metadata.expires_at": {"$exists": exists}})
+            "metadata.source", tenant_filter({"metadata.nivel_acesso": {"$nin": list(levels)}})
         ) if s
     )
     with _scope_cache_lock:

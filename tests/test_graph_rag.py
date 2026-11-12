@@ -425,7 +425,7 @@ _API_SCRIPT = """
             seen.update(engine=engine, sources=sources, graph_scope=kw.get("graph_scope"))
             return "ctx", [], {"engine": engine}
 
-        def fake_scope(scope):
+        def fake_scope(scope, levels=None):
             seen["scope"] = scope
             return ["BASE_A", "BASE_B"] if scope == "base" else ["UP"]
 

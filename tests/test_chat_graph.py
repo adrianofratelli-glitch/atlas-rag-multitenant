@@ -49,7 +49,7 @@ class ChatStreamTests(unittest.TestCase):
                 fake_llm.stream.return_value = [Chunk("Olá"), Chunk(" mundo")]
 
                 saved = {}
-                def fake_save(thread_id, messages):
+                def fake_save(thread_id, messages, access_level="publico"):
                     saved["thread_id"] = thread_id
                     saved["messages"] = messages
 
