@@ -1,6 +1,26 @@
 import axios from 'axios'
 
 /**
+ * Perfil de acesso: o servidor decide pelo token (Authorization: Bearer), nunca pelo corpo.
+ * Sem token = só público. O token restrito vem de POST /api/session (emissor de demo;
+ * em produção, do IdP). Guardado só em memória: recarregar a página volta ao público.
+ */
+let accessToken = null
+
+export function setAccessToken(token) {
+  accessToken = token || null
+}
+
+export function authHeaders() {
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+}
+
+export async function createSession(level) {
+  const { data } = await axios.post('/api/session', { level }, { timeout: 10000 })
+  return data
+}
+
+/**
  * O backend leva alguns segundos para subir (imports pesados), e o launcher abre
  * o browser assim que a porta responde. Sem retry, a primeira carga cai na casca
  * offline e só um reload manual conserta.
@@ -23,12 +43,12 @@ export async function getStatus(force = false) {
 }
 
 export async function getHistory(threadId) {
-  const { data } = await axios.get(`/api/history/${encodeURIComponent(threadId)}`, { timeout: 30000 })
+  const { data } = await axios.get(`/api/history/${encodeURIComponent(threadId)}`, { timeout: 30000, headers: authHeaders() })
   return data.messages || []
 }
 
 export async function getDocuments() {
-  const { data } = await axios.get('/api/documents', { timeout: 30000 })
+  const { data } = await axios.get('/api/documents', { timeout: 30000, headers: authHeaders() })
   return data
 }
 
@@ -38,7 +58,7 @@ export async function uploadDocument({ file, nivelAcesso = 'publico', reset = fa
   form.append('file', file)
   form.append('nivel_acesso', nivelAcesso)
   form.append('reset', String(reset))
-  const { data } = await axios.post('/api/documents', form, { timeout: 120000 })
+  const { data } = await axios.post('/api/documents', form, { timeout: 120000, headers: authHeaders() })
   return data
 }
 
@@ -73,7 +93,7 @@ export async function streamChat({ question, messages, threadId, accessLevel, so
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       signal: controller.signal,
       body: JSON.stringify({
         question, messages, thread_id: threadId,
@@ -84,7 +104,9 @@ export async function streamChat({ question, messages, threadId, accessLevel, so
     if (!res.ok || !res.body) {
       fail(res.status === 429
         ? 'Muitas consultas ao mesmo tempo. Aguarde alguns segundos e tente de novo.'
-        : `Falha na requisição ao backend (HTTP ${res.status}).`)
+        : res.status === 401
+          ? 'Sessão de acesso expirada ou inválida. Troque o perfil para renovar.'
+          : `Falha na requisição ao backend (HTTP ${res.status}).`)
       return
     }
     reader = res.body.getReader()

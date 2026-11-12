@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Banner from '@leafygreen-ui/banner'
-import { getConfig, getStatus } from './api'
+import { createSession, getConfig, getStatus, setAccessToken } from './api'
 import TopBar from './components/TopBar'
 import OfflineHero from './components/OfflineHero'
 import WorkspaceView from './components/WorkspaceView'
@@ -53,7 +53,25 @@ export default function App() {
   const [status, setStatus] = useState({ online: false, chunks: null })
   const [error, setError] = useState(null)
   const [reconnecting, setReconnecting] = useState(false)
-  const [accessLevel, setAccessLevel] = useState('publico') // produção deriva isso de claims autenticadas
+  // O perfil vale pelo token que o servidor emite e confere (POST /api/session); o botão só pede.
+  // Em produção o token vem do IdP (SSO) e RAG_DEMO_LOGIN=0 desliga o emissor de demo.
+  const [accessLevel, setAccessLevelState] = useState('publico')
+  const setAccessLevel = async (level) => {
+    if (level === 'publico') {
+      setAccessToken(null)
+      setAccessLevelState('publico')
+      return
+    }
+    try {
+      const { token } = await createSession(level)
+      setAccessToken(token)
+      setAccessLevelState(level)
+    } catch {
+      setAccessToken(null)
+      setAccessLevelState('publico')
+      setError('Esta instância não emite sessão restrita de demonstração (RAG_DEMO_LOGIN=0).')
+    }
+  }
   const [tab, setTab] = useState('base')
   // Bumped per tab by "Nova conversa"; the workspace resets on the change.
   const [resets, setResets] = useState({ base: 0, graph: 0, uploads: 0 })

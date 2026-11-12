@@ -117,6 +117,7 @@ export default function WorkspaceView({ config, scope, accessLevel, onStatusRefr
       )}
 
       {(!graph || scope === 'uploads') && <DocumentsPanel
+        accessLevel={accessLevel}
         workspace={scope}
         readOnly={panel.readOnly}
         title={panel.title}

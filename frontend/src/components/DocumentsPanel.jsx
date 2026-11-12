@@ -34,7 +34,7 @@ function expiryLabel(iso) {
  * reference documents (read-only) and "uploads" is what was sent through the
  * UI. The backend derives the same split from the TTL stamp.
  */
-export default function DocumentsPanel({ selected, onSelected, onCorpusChange, maxUploadMb, formats, ttlHours, workspace = 'uploads', readOnly = false, title = 'Base de conhecimento', emptyLabel = 'Nenhum documento indexado neste tenant ainda.' }) {
+export default function DocumentsPanel({ accessLevel, selected, onSelected, onCorpusChange, maxUploadMb, formats, ttlHours, workspace = 'uploads', readOnly = false, title = 'Base de conhecimento', emptyLabel = 'Nenhum documento indexado neste tenant ainda.' }) {
   const [docs, setDocs] = useState([])
   const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
@@ -61,7 +61,7 @@ export default function DocumentsPanel({ selected, onSelected, onCorpusChange, m
       .then((data) => setDocs((data.documents || []).filter((d) => d.workspace === workspace)))
       .catch(() => setError('Não foi possível listar os documentos indexados.'))
     return () => clearTimeout(pollRef.current)
-  }, [workspace])
+  }, [workspace, accessLevel]) // a lista depende do perfil: público não vê nome de documento restrito
 
   // Ingestion is a background job: poll until it finishes. Embedding is
   // rate-limited upstream, so a large document legitimately takes minutes.
