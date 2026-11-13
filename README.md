@@ -130,7 +130,7 @@ The TTL sets `metadata.expires_at` **only** on chunks uploaded through the UI. T
 
 Uploads run on a single worker: the same VoyageAI quota limits ingestion, so jobs queue instead of competing. A large document takes minutes on the free tier; in a live demo prefer small files or a paid key with a low `VOYAGE_SLEEP_S`.
 
-Tests: `python -m unittest discover -s tests -v` (227 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
+Tests: `python -m unittest discover -s tests -v` (231 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
 
 ## Native retrieval on MongoDB 9
 
@@ -254,7 +254,8 @@ Refusal is classified by an **LLM judge** (`eval/refusal_judge.py`), with the re
 | ... of which with no claim at all, only Graph-RAG | 32 | 0 |
 | restricted document name in a public response (query panel) | 104 | 0 |
 | forged tokens rejected with 401 (other tenant with a valid signature, bad signature, `alg: none`, expired) | 0/2 | 4/4 |
-| restricted demo token without/with a wrong password refused | n/a | 2/2 |
+| restricted demo token without/with a wrong password refused (each after a 1 s delay) | n/a | 2/2 |
+| public upload reusing a restricted upload's name (with and without `reset`): same 404, nothing written | n/a | yes |
 | public `DELETE` of a restricted upload answers like a missing one, nothing deleted | n/a | yes |
 | restricted upload job hidden from the public list and `GET /jobs/{id}` | n/a | yes |
 | restricted names in the public document list | 2 | 0 |
@@ -262,7 +263,7 @@ Refusal is classified by an **LLM judge** (`eval/refusal_judge.py`), with the re
 | restricted profile still finds the restricted annex | 6/6 | 6/6 |
 | injected chunks dropped before the prompt | 96 | 96 |
 
-Tenant isolation already held before (the `client_id` pre-filter); the access level did not. Content leaks before came from the body-claimed level (40 probes) and from Graph-RAG, whose evidence and entities ignored the level even for an honest public caller (32 probes). Names leaked through the query panel (the workspace source list was not level-filtered; the first version of the fix then echoed the graph's `$nin` list, now shown as a count), the document list and the open history. LLM answers checked after: 6 full answers from a public token, none with a canary. `n/a`: the probe did not exist on `main` (no demo issuer, no auth on jobs or delete).
+Tenant isolation already held before (the `client_id` pre-filter); the access level did not. Content leaks before came from the body-claimed level (40 probes) and from Graph-RAG, whose evidence and entities ignored the level even for an honest public caller (32 probes). Names leaked through the query panel (the workspace source list was not level-filtered; the first version of the fix then echoed the graph's `$nin` list, now a marker with no names or count), the document list and the open history. LLM answers checked after: 6 full answers from a public token, none with a canary. `n/a`: the probe did not exist on `main` (no demo issuer, no auth on jobs or delete).
 
 Methodology and reproduction: `./eval/run_all.sh` runs everything. There are **two venvs**: `.venv` (retrieval, generation) and `.venv-eval` (Ragas and Presidio, which require a `numpy`/`langchain-community` downgrade incompatible with the main one). Full reports are generated locally in `eval/reports/` (not versioned).
 
@@ -305,7 +306,7 @@ The native path was attacked on purpose before release. Everything below was run
 
 ## Production boundary
 
-Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access level comes from a server-verified token and filters every read path (hybrid, outline, Graph-RAG, document list, history); restricted upload requires a restricted token. The demo issuer (`/api/session`) gives the restricted level only with `RAG_DEMO_PASSWORD`; a shared demo password is still not identity: turn it off with `RAG_DEMO_LOGIN=0` and issue tokens from your IdP, with a fixed `RAG_AUTH_SECRET`. Restricted upload jobs (name, file, level) are visible only to a restricted grant, and deleting a document requires a grant covering all its chunks (otherwise 404, the same answer as a missing document). Public uploads can still be added or removed by anyone who reaches the API. The reference corpus is protected on both ends: it cannot be deleted through the API (403), and an upload whose name matches a reference document is refused (422), because re-indexing it would have deleted the corpus. An external deployment requires the token to be issued by SSO (RS256/JWKS instead of the demo HS256 issuer).
+Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access level comes from a server-verified token and filters every read path (hybrid, outline, Graph-RAG, document list, history); restricted upload requires a restricted token. The demo issuer (`/api/session`) gives the restricted level only with `RAG_DEMO_PASSWORD`; a shared demo password is still not identity: turn it off with `RAG_DEMO_LOGIN=0` and issue tokens from your IdP, with a fixed `RAG_AUTH_SECRET`. Restricted upload jobs (name, file, level) are visible only to a restricted grant, and deleting a document requires a grant covering all its chunks (otherwise 404, the same answer as a missing document). Public uploads can still be added or removed by anyone who reaches the API, but an upload that reuses the name of a document the caller cannot read gets 404 before anything is written (it used to wipe the restricted chunks with `reset=true`). The threat-model table for a caller without a token is in ADR 0001. The reference corpus is protected on both ends: it cannot be deleted through the API (403), and an upload whose name matches a reference document is refused (422), because re-indexing it would have deleted the corpus. An external deployment requires the token to be issued by SSO (RS256/JWKS instead of the demo HS256 issuer).
 
 ## Adding a tenant
 

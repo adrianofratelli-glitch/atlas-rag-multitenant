@@ -177,7 +177,7 @@ def _headers(client: httpx.Client, base: str, auth_mode) -> dict:
     return {}
 
 
-def _meta_event(client, base, body, headers, full=False, attempts=8):
+def _meta_event(client, base, body, headers, full=False, attempts=12):
     """Lê o SSE até o meta (ou até o fim com `full`): o que a UI mostra e o que vai ao modelo.
 
     Ao fechar o stream depois do meta, a thread de geração do servidor ainda segura a vaga de

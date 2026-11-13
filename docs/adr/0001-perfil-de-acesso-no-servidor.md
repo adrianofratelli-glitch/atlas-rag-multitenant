@@ -31,8 +31,31 @@ A avaliação ao vivo de 2026-11-12 (banco `*_test`, tenant B semeado na mesma c
 - Jobs de upload restrito e remoção de documento seguem o mesmo nível: job restrito some da
   lista e responde 404 por id; `DELETE` exige nível que cubra todos os trechos e responde 404
   igual ao inexistente.
-- O pipeline do Graph-RAG exibido na UI troca a lista `$nin` de documentos negados por uma
-  contagem e marca `pipeline_redacted: true`.
+- O pipeline do Graph-RAG exibido na UI troca a lista `$nin` de documentos negados por um
+  marcador sem nome nem contagem e marca `pipeline_redacted: true`.
+- Upload com nome de documento que o chamador não lê (algum trecho acima do nível concedido)
+  responde 404 antes de qualquer escrita, com e sem `reset`; antes, `reset=true` sem token
+  apagava os trechos restritos e gravava conteúdo público no lugar. O erro "já indexado" não
+  traz mais contagem de trechos.
+- `POST /api/session` com senha errada ou ausente espera `RAG_DEMO_FAIL_DELAY_S` (1 s) antes do 401.
+
+## Modelo de ameaça: chamador sem token (varredura das rotas que escrevem, 2026-11-12)
+
+| Rota | O que ele consegue | O que não consegue |
+|---|---|---|
+| `POST /api/session` | token público | token restrito (senha; 1 s por falha) |
+| `POST /api/documents` | enviar, reindexar e sobrescrever upload **público** | enviar restrito (403); tocar nome de documento que não lê (404, nada gravado); substituir o corpus base (422) |
+| `DELETE /api/documents/{source}` | apagar upload **público** | apagar restrito ou misto (404 igual ao inexistente); corpus base (403) |
+| `POST /api/chat` | gravar a própria conversa e o checkpoint do LangGraph sob um `thread_id` | ler conversa restrita; sobrescrever conversa gravada sob nível maior |
+
+Riscos aceitos na PoC (sem identidade de usuário): um chamador sem token pode sobrescrever upload
+ou conversa **pública** de outro (o `thread_id` é UUID não adivinhável) e gravar checkpoint num
+`thread_id` alheio (não há rota que leia checkpoint). O 404 de upload revela só que **um nome**
+está ocupado por algo fora do perfil, sem conteúdo, nível ou contagem.
+
+Metadado aceito: `/api/status` e `/api/health` devolvem a contagem total de trechos do tenant
+(todos os níveis). É um número agregado, sem nome nem conteúdo, e o Portal e o smoke dependem
+dele; um deploy que trate até a quantidade como sensível deve tirar `chunks` dessas rotas.
 - Segredo em `RAG_AUTH_SECRET`; sem ele, cada processo sorteia um segredo efêmero (não existe
   segredo padrão conhecido; tokens morrem no restart).
 - O mesmo nível concedido filtra todo caminho de leitura: busca híbrida, outline, Graph-RAG
