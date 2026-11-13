@@ -565,9 +565,9 @@ def api_config():
         # O perfil de acesso é decidido no servidor (token); `demo_login` diz se esta instância
         # emite tokens de demonstração em /api/session (produção: RAG_DEMO_LOGIN=0 + IdP).
         "auth": {"demo_login": auth.DEMO_LOGIN, "levels": list(auth.LEVELS),
-                 # Sem senha configurada o emissor só dá o público: a UI explica em vez de tentar.
-                 "restricted_requires_password": True,
-                 "restricted_available": auth.DEMO_LOGIN and bool(auth.DEMO_PASSWORD)},
+                 # Sem RAG_DEMO_PASSWORD o restrito sai sem senha; com ela, a UI pede a senha.
+                 "restricted_requires_password": bool(auth.DEMO_PASSWORD),
+                 "restricted_available": auth.DEMO_LOGIN},
     }
 
 
@@ -576,7 +576,7 @@ DEMO_FAIL_DELAY_S = max(0.0, float(os.getenv("RAG_DEMO_FAIL_DELAY_S", "1.0")))
 
 class SessionBody(BaseModel):
     level: Literal["publico", "restrito"] = "publico"
-    # Senha de demo (RAG_DEMO_PASSWORD) — exigida só para níveis acima do público.
+    # Senha de demo (RAG_DEMO_PASSWORD) — exigida acima do público só quando a variável existe.
     password: str | None = Field(default=None, max_length=200)
 
 
@@ -593,9 +593,7 @@ async def api_session(body: SessionBody):
         observability.metrics.bump("auth_demo_refused", 1)
         # Atraso fixo em toda falha: força bruta na senha fica lenta (assíncrono: não prende thread).
         await asyncio.sleep(DEMO_FAIL_DELAY_S)
-        detail = ("perfil restrito exige a senha de demonstração" if auth.DEMO_PASSWORD
-                  else "perfil restrito desligado: defina RAG_DEMO_PASSWORD no servidor")
-        raise HTTPException(status_code=401, detail=detail)
+        raise HTTPException(status_code=401, detail="perfil restrito exige a senha de demonstração")
     token = auth.issue_token(CLIENT_ID, body.level)
     observability.metrics.bump("auth_demo_tokens", 1)
     return {"token": token, "level": body.level, "expires_in": auth.TOKEN_TTL_S}

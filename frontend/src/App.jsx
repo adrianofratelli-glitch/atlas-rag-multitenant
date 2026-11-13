@@ -63,15 +63,17 @@ export default function App() {
       return
     }
     const auth = config?.auth || {}
-    if (auth.demo_login === false || auth.restricted_available === false) {
-      setError(auth.demo_login === false
-        ? 'Esta instância não emite sessão de demonstração (RAG_DEMO_LOGIN=0): o perfil vem do IdP.'
-        : 'O perfil restrito precisa da senha de demonstração, e o servidor não tem uma configurada (RAG_DEMO_PASSWORD).')
+    if (auth.demo_login === false) {
+      setError('Esta instância não emite sessão de demonstração (RAG_DEMO_LOGIN=0): o perfil vem do IdP.')
       return
     }
-    // O servidor só emite o nível restrito com a senha de demo (comparada lá, nunca aqui).
-    const password = window.prompt('Senha de demonstração do perfil restrito')
-    if (!password) return
+    // Com RAG_DEMO_PASSWORD no servidor, o restrito pede a senha (comparada lá, nunca aqui);
+    // sem ela, o servidor emite o restrito sem senha (demo aberta, ADR 0001).
+    let password
+    if (auth.restricted_requires_password) {
+      password = window.prompt('Senha de demonstração do perfil restrito')
+      if (!password) return
+    }
     try {
       const { token } = await createSession(level, password)
       setAccessToken(token)

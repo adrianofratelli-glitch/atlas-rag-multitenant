@@ -8,8 +8,9 @@ cliente lia o conteúdo restrito. Agora o perfil vem de um token com claims veri
 - Sem token: só `publico`. O `access_level` do corpo só pode *reduzir* o que o token concede.
 - Token com assinatura inválida, expirado ou de outro tenant (`tid` != CLIENT_ID): 401.
 - Emissor de demo (`POST /api/session`): existe para a PoC mostrar o filtro de ACL sem um IdP.
-  O nível público sai sem credencial; o restrito exige `RAG_DEMO_PASSWORD` (comparada em tempo
-  constante). Sem a variável, o emissor só dá o público: falha fechada. `RAG_DEMO_LOGIN=0`
+  O nível público sai sem credencial. O restrito: com `RAG_DEMO_PASSWORD` definida, só com essa
+  senha (comparada em tempo constante); sem a variável, sai sem senha (decisão do usuário em
+  2026-11-13: a demo troca de perfil livremente; risco aceito no ADR). `RAG_DEMO_LOGIN=0`
   desliga o emissor; em produção o token vem do IdP (SSO) e só a verificação abaixo fica.
   Ver docs/adr/0001-perfil-de-acesso-no-servidor.md.
 
@@ -37,13 +38,17 @@ class AuthError(Exception):
 
 
 def demo_can_issue(level: str, password: str | None) -> bool:
-    """O emissor de demo dá `publico` a qualquer um; níveis acima só com a senha de demo."""
+    """O emissor de demo dá `publico` a qualquer um; níveis acima pedem a senha só se houver uma.
+
+    Sem `RAG_DEMO_PASSWORD`, o restrito sai sem senha (demo aberta, ADR 0001, 2026-11-13): quem
+    alcança a API consegue o perfil restrito. Para fechar, basta definir a variável.
+    """
     if level not in _RANK:
         return False
-    if _RANK[level] == 0:
+    if _RANK[level] == 0 or not DEMO_PASSWORD:
         return True
-    if not DEMO_PASSWORD or not password:
-        return False  # sem senha configurada: falha fechada
+    if not password:
+        return False
     return hmac.compare_digest(password.encode(), DEMO_PASSWORD.encode())
 
 

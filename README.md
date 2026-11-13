@@ -86,7 +86,7 @@ If one of the two indexes fails, the other carries the query. The stable instruc
 
 Ingestion accepts PDF, DOCX, TXT, CSV, Markdown, HTML, JSON, XLSX, and PPTX, through the CLI (`backend/ingest.py`) or the UI upload, which enqueues a job and reports progress at `/api/documents/jobs/{job_id}`. The job is reported `done` only when both indexes return the new document (`$searchMeta` count of its chunks and a `$vectorSearch` restricted to it, tenant-filtered); until then it stays in phase `indexing` and the UI says the indexes are syncing. If they take longer than `UPLOAD_INDEX_WAIT_S` (120 s) the job finishes with `searchable: false` and the UI keeps a "still syncing" notice instead of announcing it as ready. Documents live in the same collection, separated by `metadata.source`, which is a filter field in both search indexes.
 
-> The access level is decided **server-side**: the profile button asks `POST /api/session` for a signed token (HS256, tenant + level + expiry) and every call sends it as `Authorization: Bearer`. No token means public only; an invalid, expired or other-tenant token gets 401; an `access_level` in the body can only lower the grant. `/api/session` is a demo issuer: the public level needs nothing, the restricted level needs the demo password (`RAG_DEMO_PASSWORD`, compared in constant time; the UI asks for it when you switch to `restrito`). Without that variable the issuer only hands out public tokens (fails closed). `RAG_DEMO_LOGIN=0` turns the issuer off; in production the token comes from your IdP. See [ADR 0001](docs/adr/0001-perfil-de-acesso-no-servidor.md).
+> The access level is decided **server-side**: the profile button asks `POST /api/session` for a signed token (HS256, tenant + level + expiry) and every call sends it as `Authorization: Bearer`. No token means public only; an invalid, expired or other-tenant token gets 401; an `access_level` in the body can only lower the grant. `/api/session` is a demo issuer: the public level needs nothing. The restricted level needs no password unless `RAG_DEMO_PASSWORD` is set; then it needs that password (compared in constant time, 1 s delay on failure; the UI asks for it when you switch to `restrito`). **Without that variable, anyone who can reach the API can get a restricted token**: the profile switch demonstrates the server-side filter, it does not protect the restricted content. Set `RAG_DEMO_PASSWORD` to protect the demo; in production use SSO. `RAG_DEMO_LOGIN=0` turns the issuer off; in production the token comes from your IdP. See [ADR 0001](docs/adr/0001-perfil-de-acesso-no-servidor.md).
 
 ## Run it
 
@@ -254,7 +254,8 @@ Refusal is classified by an **LLM judge** (`eval/refusal_judge.py`), with the re
 | ... of which with no claim at all, only Graph-RAG | 32 | 0 |
 | restricted document name in a public response (query panel) | 104 | 0 |
 | forged tokens rejected with 401 (other tenant with a valid signature, bad signature, `alg: none`, expired) | 0/2 | 4/4 |
-| restricted demo token without/with a wrong password refused (each after a 1 s delay) | n/a | 2/2 |
+| restricted demo token without/with a wrong password: refused after a 1 s delay when `RAG_DEMO_PASSWORD` is set (re-run 2026-11-13) | n/a | 2/2 |
+| restricted demo token without/with a wrong password when `RAG_DEMO_PASSWORD` is unset: issued (open demo, ADR 0001 amendment; all other rows unchanged, re-run 2026-11-13) | n/a | 2/2 |
 | public upload reusing a restricted upload's name (with and without `reset`): same 404, nothing written | n/a | yes |
 | race: public `reset` right behind a queued restricted upload; the restricted one survives | n/a | yes |
 | public `DELETE` of a restricted upload answers like a missing one, nothing deleted | n/a | yes |
@@ -283,7 +284,7 @@ Resilience is on by default; each variable only tunes or disables it. Tracing an
 | `LLM_STREAM_MAX_ATTEMPTS` | `3` | Claude retry **only before the first token** (429, 5xx, timeout); after that, retrying would duplicate the answer already sent; `1` disables |
 | `STREAM_DEADLINE_S` | `120` | generation ceiling; when exceeded, a readable SSE `error` event instead of a hanging connection; `0` disables |
 | `RAG_DEMO_LOGIN` | `1` | `POST /api/session` issues demo tokens for the profile button; `0` disables it (production: tokens come from your IdP) |
-| `RAG_DEMO_PASSWORD` | unset | password for a **restricted** demo token; unset = the issuer only gives public tokens and the UI explains why |
+| `RAG_DEMO_PASSWORD` | unset | password for a **restricted** demo token; unset = the restricted token is issued without a password (open demo: anyone reaching the API gets it) |
 | `RAG_AUTH_SECRET` | random per process | HS256 key for access tokens; set a fixed one to keep tokens valid across restarts or share them with an issuer |
 | `RAG_AUTH_TOKEN_TTL_S` | `28800` | access-token lifetime |
 | `RAG_INJECTION_FILTER` | `1` | drops retrieved passages with a prompt-injection pattern before the prompt (offline heuristic, also when the instruction is buried in a long legitimate passage); `0` disables |

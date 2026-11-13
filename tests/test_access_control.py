@@ -151,12 +151,21 @@ class SessionAndHistoryTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(auth.verify_token(resp.json()["token"], TENANT)["lvl"], "publico")
 
-    def test_restricted_session_without_configured_password_fails_closed(self):
-        """Achado da revisão: RAG_DEMO_LOGIN ligado emitia restrito para qualquer curl."""
+    def test_restricted_session_without_configured_password_is_open(self):
+        """Decisão do usuário (2026-11-13): sem RAG_DEMO_PASSWORD o restrito sai sem senha."""
         for body in ({"level": "restrito"}, {"level": "restrito", "password": ""},
                      {"level": "restrito", "password": "qualquer"}):
             with self.subTest(body=body):
-                self.assertEqual(self._session(body, "").status_code, 401)
+                resp = self._session(body, "")
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(auth.verify_token(resp.json()["token"], TENANT)["lvl"], "restrito")
+
+    def test_open_restricted_token_is_still_tenant_bound_and_verified(self):
+        """Sem senha muda só quem pede o token: o de outro tenant segue 401 e o nível vem do token."""
+        tok = self._session({"level": "restrito"}, "").json()["token"]
+        with self.assertRaises(auth.AuthError):
+            auth.verify_token(tok, "outro-tenant")
+        self.assertEqual(auth.effective_level(auth.verify_token(tok, TENANT)["lvl"], "publico"), "publico")
 
     def test_restricted_session_with_wrong_password_is_401(self):
         for pw in (None, "", "errada", "s3nha-demo "):
@@ -170,11 +179,13 @@ class SessionAndHistoryTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(auth.verify_token(resp.json()["token"], TENANT)["lvl"], "restrito")
 
-    def test_config_says_whether_restricted_is_available(self):
-        with mock.patch.object(auth, "DEMO_PASSWORD", ""), \
-             mock.patch.object(api, "get_graph_status", return_value={"ready": False}):
-            cfg = TestClient(api.app).get("/api/config").json()
-        self.assertFalse(cfg["auth"]["restricted_available"])
+    def test_config_says_whether_restricted_needs_password(self):
+        for pw, needs in (("", False), ("s3nha", True)):
+            with self.subTest(pw=pw), mock.patch.object(auth, "DEMO_PASSWORD", pw), \
+                    mock.patch.object(api, "get_graph_status", return_value={"ready": False}):
+                cfg = TestClient(api.app).get("/api/config").json()
+            self.assertTrue(cfg["auth"]["restricted_available"])
+            self.assertEqual(cfg["auth"]["restricted_requires_password"], needs)
 
     def test_demo_session_can_be_turned_off(self):
         with mock.patch.object(auth, "DEMO_LOGIN", False):

@@ -10,10 +10,11 @@ coleção do tenant A (o pior caso: só o filtro `metadata.client_id` separa os 
 (`kg_entities`) recebe entidades sintéticas dos dois tenants e de um upload restrito.
 
 Uso (o backend precisa estar no ar com CLIENT_ID=tenant_a, o mesmo DB_NAME e os mesmos
-RAG_AUTH_SECRET/RAG_DEMO_PASSWORD do eval: com o segredo compartilhado, o token do tenant B tem
+RAG_AUTH_SECRET/RAG_DEMO_PASSWORD do eval (ou a senha ausente nos dois: as sondas de restrito
+sem senha passam a esperar sucesso); com o segredo compartilhado, o token do tenant B tem
 assinatura válida e o 401 prova a checagem do `tid`; GRAPH_ON_UPLOAD=0 evita chamadas de LLM no
 upload da sonda de jobs):
-    export DB_NAME=ragmt_iso_test CLIENT_ID=tenant_a RAG_NATIVE=1 RAG_AUTH_SECRET=<hex> RAG_DEMO_PASSWORD=<senha>
+    export DB_NAME=ragmt_iso_test CLIENT_ID=tenant_a RAG_NATIVE=1 RAG_AUTH_SECRET=<hex> [RAG_DEMO_PASSWORD=<senha>]
     python -m eval.isolation_eval --seed --wait
     GRAPH_ON_UPLOAD=0 uvicorn backend.api:app --port 18180 &
     python -m eval.isolation_eval --base-url http://127.0.0.1:18180
@@ -168,7 +169,7 @@ def wait_ready(timeout_s: int = 1800) -> bool:
 
 def _headers(client: httpx.Client, base: str, auth_mode) -> dict:
     if auth_mode in ("publico", "restrito"):
-        # O restrito exige a senha de demo (RAG_DEMO_PASSWORD, mesma do backend).
+        # Com RAG_DEMO_PASSWORD (mesma do backend) o restrito exige a senha; sem ela, sai sem senha.
         r = client.post(f"{base}/api/session",
                         json={"level": auth_mode, "password": os.getenv("RAG_DEMO_PASSWORD")})
         if r.status_code == 404:  # backend anterior a 2026-11-12: não havia token; o corpo mandava
@@ -279,16 +280,26 @@ def run(base: str, with_llm: int) -> dict:
         forged_ok += r.status_code == 401
         rows.append({"perfil": f"forjado: {name}", "status": r.status_code})
 
-    # Emissor de demo: restrito sem senha ou com senha errada não sai.
-    session_refused = 0
+    # Emissor de demo, restrito sem senha ou com senha errada. Com RAG_DEMO_PASSWORD (a mesma do
+    # backend): 401 sem token e com o atraso anti força bruta (RAG_DEMO_FAIL_DELAY_S, padrão 1 s).
+    # Sem a variável (demo aberta, decisão de 2026-11-13, ADR 0001): 200 com token restrito do tenant A.
+    session_mode = "senha" if os.getenv("RAG_DEMO_PASSWORD") else "aberto"
+    session_expected = 0
     session_probes = [{"level": "restrito"}, {"level": "restrito", "password": "errada"}]
     for body in session_probes:
         t0 = time.monotonic()
         r = client.post(f"{base}/api/session", json=body)
-        # 401 sem token e com o atraso anti força bruta (RAG_DEMO_FAIL_DELAY_S, padrão 1 s)
-        session_refused += (r.status_code == 401 and "token" not in r.text
-                            and time.monotonic() - t0 >= 0.9)
-    session_refused_ok = f"{session_refused}/{len(session_probes)}"
+        if session_mode == "senha":
+            session_expected += (r.status_code == 401 and "token" not in r.text
+                                 and time.monotonic() - t0 >= 0.9)
+        else:
+            try:
+                claims = auth.verify_token(r.json()["token"], TENANT_A) if r.status_code == 200 else {}
+            except (auth.AuthError, KeyError, ValueError):
+                claims = {}  # sem RAG_AUTH_SECRET compartilhado a assinatura não confere aqui
+            session_expected += (r.status_code == 200 and r.json().get("level") == "restrito"
+                                 and (claims.get("lvl") == "restrito" or not shared_secret))
+    session_ok = f"{session_expected}/{len(session_probes)}"
 
     # Remoção: sem perfil, documento restrito responde igual a inexistente (404) e nada é apagado.
     db = _db()
@@ -386,7 +397,8 @@ def run(base: str, with_llm: int) -> dict:
         "documents_listing_leaks": docs_leak,
         "history_acl_ok": history_ok,
         "forged_shared_secret": shared_secret,
-        "demo_session_restricted_refused": session_refused_ok,
+        "demo_session_mode": session_mode,
+        "demo_session_restricted_as_expected": session_ok,
         "delete_hidden_ok": delete_ok,
         "public_overwrite_blocked_ok": overwrite_ok,
         "jobs_hidden_ok": jobs_ok,
@@ -422,7 +434,7 @@ def main(argv=None) -> int:
     print(f"relatório: {out}")
     llm_leaks = sum(bool(a["tenant_leak"] or a["acl_leak"]) for a in report["llm_answers"])
     ok_probes, planned = map(int, report["probes"].split("/"))
-    sr, sp = report["demo_session_restricted_refused"].split("/")
+    sr, sp = report["demo_session_restricted_as_expected"].split("/")
     failed = (ok_probes != planned or not report["history_acl_ok"] or sr != sp or not report["delete_hidden_ok"]
               or not report["public_overwrite_blocked_ok"]
               or report["jobs_hidden_ok"] is False or report["upload_race_ok"] is False or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
