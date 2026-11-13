@@ -15,8 +15,8 @@ export function authHeaders() {
   return accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
 }
 
-export async function createSession(level) {
-  const { data } = await axios.post('/api/session', { level }, { timeout: 10000 })
+export async function createSession(level, password) {
+  const { data } = await axios.post('/api/session', { level, password }, { timeout: 10000 })
   return data
 }
 

@@ -8,8 +8,10 @@ cliente lia o conteúdo restrito. Agora o perfil vem de um token com claims veri
 - Sem token: só `publico`. O `access_level` do corpo só pode *reduzir* o que o token concede.
 - Token com assinatura inválida, expirado ou de outro tenant (`tid` != CLIENT_ID): 401.
 - Emissor de demo (`POST /api/session`): existe para a PoC mostrar o filtro de ACL sem um IdP.
-  `RAG_DEMO_LOGIN=0` desliga o emissor; em produção o token vem do IdP (SSO) e só a
-  verificação abaixo fica. Ver docs/adr/0001-perfil-de-acesso-no-servidor.md.
+  O nível público sai sem credencial; o restrito exige `RAG_DEMO_PASSWORD` (comparada em tempo
+  constante). Sem a variável, o emissor só dá o público: falha fechada. `RAG_DEMO_LOGIN=0`
+  desliga o emissor; em produção o token vem do IdP (SSO) e só a verificação abaixo fica.
+  Ver docs/adr/0001-perfil-de-acesso-no-servidor.md.
 
 Segredo: `RAG_AUTH_SECRET`. Sem ele, cada processo sorteia um segredo efêmero (tokens morrem
 no restart; nunca há segredo padrão conhecido).
@@ -26,11 +28,23 @@ LEVELS = ("publico", "restrito")
 _RANK = {lvl: i for i, lvl in enumerate(LEVELS)}
 TOKEN_TTL_S = max(60, int(os.getenv("RAG_AUTH_TOKEN_TTL_S", "28800")))
 DEMO_LOGIN = os.getenv("RAG_DEMO_LOGIN", "1") != "0"
+DEMO_PASSWORD = os.getenv("RAG_DEMO_PASSWORD") or ""
 _SECRET = (os.getenv("RAG_AUTH_SECRET") or secrets.token_hex(32)).encode()
 
 
 class AuthError(Exception):
     """Token presente mas inválido: o chamador responde 401, nunca rebaixa em silêncio."""
+
+
+def demo_can_issue(level: str, password: str | None) -> bool:
+    """O emissor de demo dá `publico` a qualquer um; níveis acima só com a senha de demo."""
+    if level not in _RANK:
+        return False
+    if _RANK[level] == 0:
+        return True
+    if not DEMO_PASSWORD or not password:
+        return False  # sem senha configurada: falha fechada
+    return hmac.compare_digest(password.encode(), DEMO_PASSWORD.encode())
 
 
 def _b64(data: bytes) -> str:
@@ -107,6 +121,12 @@ def effective_level(granted: str, requested: str | None) -> str:
 def levels_for(level: str) -> list[str]:
     """Níveis legíveis por um perfil (default-deny: valor desconhecido = só público)."""
     return list(LEVELS[: _RANK[level] + 1]) if level in _RANK else ["publico"]
+
+
+def max_level(levels) -> str:
+    """O nível mais alto de uma lista (para "cobre todos os trechos do documento")."""
+    known = [lvl for lvl in levels if lvl in _RANK] or [LEVELS[-1]]
+    return max(known, key=_RANK.__getitem__)
 
 
 def can_read(granted: str, required: str | None) -> bool:

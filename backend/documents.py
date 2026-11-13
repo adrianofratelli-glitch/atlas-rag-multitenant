@@ -239,6 +239,20 @@ def denied_sources(levels: list[str] | None) -> list[str]:
     return value
 
 
+def source_levels(source: str) -> list[str]:
+    """Níveis de acesso dos trechos de um documento do tenant (vazio = não existe).
+
+    Trecho sem `nivel_acesso` conta como o nível mais alto (falha fechada).
+    """
+    col = get_client()[DB_NAME]["documents"]
+    levels = {lvl if lvl else "restrito" for lvl in col.distinct(
+        "metadata.nivel_acesso", tenant_filter({"metadata.source": source}))}
+    if col.count_documents(tenant_filter({"metadata.source": source,
+                                          "metadata.nivel_acesso": {"$exists": False}}), limit=1):
+        levels.add("restrito")
+    return sorted(levels)
+
+
 def is_protected(source: str) -> bool:
     """The tenant's reference corpus — ingested by CLI, so it carries no TTL stamp.
 

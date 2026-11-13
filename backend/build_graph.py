@@ -220,8 +220,7 @@ def ensure_indexes(db) -> None:
     ent, com = db["kg_entities"], db["kg_communities"]
     # Tenant novo sem grafo base: o primeiro upload chegava aqui sem `kg_communities` e o
     # createSearchIndex falhava (NamespaceNotFound) — o grafo do upload nunca ficava pronto.
-    if "kg_communities" not in db.list_collection_names():
-        db.create_collection("kg_communities", validator=COMMUNITY_SCHEMA, validationLevel="strict")
+    _ensure_collection(db, "kg_communities", COMMUNITY_SCHEMA)
     ent.create_index([("client_id", 1), ("scope", 1), ("type", 1)], name="client_scope_type")
     # $graphLookup casa `links` -> `_id` (já indexado); este índice serve a travessia reversa.
     ent.create_index([("links", 1)], name="links")

@@ -62,14 +62,27 @@ export default function App() {
       setAccessLevelState('publico')
       return
     }
+    const auth = config?.auth || {}
+    if (auth.demo_login === false || auth.restricted_available === false) {
+      setError(auth.demo_login === false
+        ? 'Esta instância não emite sessão de demonstração (RAG_DEMO_LOGIN=0): o perfil vem do IdP.'
+        : 'O perfil restrito precisa da senha de demonstração, e o servidor não tem uma configurada (RAG_DEMO_PASSWORD).')
+      return
+    }
+    // O servidor só emite o nível restrito com a senha de demo (comparada lá, nunca aqui).
+    const password = window.prompt('Senha de demonstração do perfil restrito')
+    if (!password) return
     try {
-      const { token } = await createSession(level)
+      const { token } = await createSession(level, password)
       setAccessToken(token)
       setAccessLevelState(level)
-    } catch {
+      setError(null)
+    } catch (err) {
       setAccessToken(null)
       setAccessLevelState('publico')
-      setError('Esta instância não emite sessão restrita de demonstração (RAG_DEMO_LOGIN=0).')
+      setError(err?.response?.status === 401
+        ? 'Senha de demonstração incorreta: o perfil continua público.'
+        : 'Não foi possível abrir a sessão restrita. Tente de novo.')
     }
   }
   const [tab, setTab] = useState('base')

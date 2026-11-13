@@ -130,10 +130,39 @@ class ChatAccessTests(unittest.TestCase):
 
 
 class SessionAndHistoryTests(unittest.TestCase):
-    def test_demo_session_issues_verifiable_token(self):
-        resp = TestClient(api.app).post("/api/session", json={"level": "restrito"})
+    def _session(self, body, password_env):
+        with mock.patch.object(auth, "DEMO_PASSWORD", password_env):
+            return TestClient(api.app).post("/api/session", json=body)
+
+    def test_public_session_needs_no_password(self):
+        resp = self._session({"level": "publico"}, "")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(auth.verify_token(resp.json()["token"], TENANT)["lvl"], "publico")
+
+    def test_restricted_session_without_configured_password_fails_closed(self):
+        """Achado da revisão: RAG_DEMO_LOGIN ligado emitia restrito para qualquer curl."""
+        for body in ({"level": "restrito"}, {"level": "restrito", "password": ""},
+                     {"level": "restrito", "password": "qualquer"}):
+            with self.subTest(body=body):
+                self.assertEqual(self._session(body, "").status_code, 401)
+
+    def test_restricted_session_with_wrong_password_is_401(self):
+        for pw in (None, "", "errada", "s3nha-demo "):
+            with self.subTest(pw=pw):
+                resp = self._session({"level": "restrito", "password": pw}, "s3nha-demo")
+                self.assertEqual(resp.status_code, 401)
+                self.assertNotIn("token", resp.json())
+
+    def test_restricted_session_with_right_password_issues_token(self):
+        resp = self._session({"level": "restrito", "password": "s3nha-demo"}, "s3nha-demo")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(auth.verify_token(resp.json()["token"], TENANT)["lvl"], "restrito")
+
+    def test_config_says_whether_restricted_is_available(self):
+        with mock.patch.object(auth, "DEMO_PASSWORD", ""), \
+             mock.patch.object(api, "get_graph_status", return_value={"ready": False}):
+            cfg = TestClient(api.app).get("/api/config").json()
+        self.assertFalse(cfg["auth"]["restricted_available"])
 
     def test_demo_session_can_be_turned_off(self):
         with mock.patch.object(auth, "DEMO_LOGIN", False):
@@ -173,6 +202,46 @@ class SessionAndHistoryTests(unittest.TestCase):
         with mock.patch.object(api, "get_client", return_value={api.DB_NAME: {"conversations": col}}):
             api._save_conversation("t1", [{"role": "user", "content": "q"}], "publico")
         col.update_one.assert_not_called()
+
+    def test_job_listing_and_job_lookup_hide_restricted_uploads(self):
+        jobs = [{"job_id": "j1", "source": "pub", "nivel_acesso": "publico"},
+                {"job_id": "j2", "source": "segredo", "nivel_acesso": "restrito"}]
+        with mock.patch.object(documents, "list_documents",
+                               return_value={"documents": [], "truncated": False, "total": 0}), \
+             mock.patch.object(documents, "list_jobs", return_value=jobs), \
+             mock.patch.object(documents, "get_job", side_effect=lambda j: next(x for x in jobs if x["job_id"] == j)):
+            client = TestClient(api.app)
+            listed = [j["source"] for j in client.get("/api/documents").json()["jobs"]]
+            self.assertEqual(listed, ["pub"])
+            self.assertEqual(client.get("/api/documents/jobs/j2").status_code, 404)
+            self.assertEqual(client.get("/api/documents/jobs/j1").status_code, 200)
+            tok = auth.issue_token(TENANT, "restrito")
+            self.assertEqual(client.get("/api/documents/jobs/j2",
+                                        headers={"Authorization": f"Bearer {tok}"}).status_code, 200)
+
+    def test_delete_restricted_without_grant_looks_like_missing(self):
+        def levels(source):
+            return {"segredo": ["restrito"], "misto": ["publico", "restrito"], "pub": ["publico"]}.get(source, [])
+
+        with mock.patch.object(documents, "source_levels", side_effect=levels), \
+             mock.patch.object(documents, "delete_document", return_value=3) as dele:
+            client = TestClient(api.app)
+            for src in ("segredo", "misto", "nao-existe"):
+                with self.subTest(src=src):
+                    resp = client.delete(f"/api/documents/{src}")
+                    self.assertEqual((resp.status_code, resp.json()["detail"]), (404, "documento não encontrado"))
+            dele.assert_not_called()
+            self.assertEqual(client.delete("/api/documents/pub").status_code, 200)
+            tok = auth.issue_token(TENANT, "restrito")
+            self.assertEqual(client.delete("/api/documents/misto",
+                                           headers={"Authorization": f"Bearer {tok}"}).status_code, 200)
+
+    def test_source_levels_treats_missing_level_as_restricted(self):
+        col = mock.MagicMock()
+        col.distinct.return_value = ["publico"]
+        col.count_documents.return_value = 1
+        with mock.patch.object(documents, "get_client", return_value={documents.DB_NAME: {"documents": col}}):
+            self.assertEqual(documents.source_levels("x"), ["publico", "restrito"])
 
     def test_restricted_upload_requires_restricted_token(self):
         with mock.patch.object(documents, "start_ingestion") as start:
@@ -232,13 +301,34 @@ class GraphAclTests(unittest.TestCase):
         db = {"kg_entities": mock.MagicMock()}
         db["kg_entities"].aggregate.return_value = []
         with mock.patch.object(documents, "denied_sources", return_value=["R"]) as ds:
-            _, pipeline = graph_retrieval.run_graph(db, "q", access_levels=["publico"])
+            parsed, pipeline = graph_retrieval.run_graph(db, "q", access_levels=["publico"])
         ds.assert_called_once_with(["publico"])
         executed = db["kg_entities"].aggregate.call_args[0][0]
         self.assertIn('"$nin": ["R"]', json.dumps(executed))
         # O pipeline exibido na UI não revela o nome do documento negado.
         self.assertNotIn('"R"', json.dumps(pipeline))
         self.assertIn("1 documento(s) fora do perfil", json.dumps(pipeline))
+        self.assertTrue(parsed["pipeline_redacted"])
+
+    def test_pipeline_not_flagged_when_nothing_denied(self):
+        db = {"kg_entities": mock.MagicMock()}
+        db["kg_entities"].aggregate.return_value = []
+        with mock.patch.object(documents, "denied_sources", return_value=[]):
+            parsed, _ = graph_retrieval.run_graph(db, "q", access_levels=["publico", "restrito"])
+        self.assertFalse(parsed["pipeline_redacted"])
+
+
+class BuildGraphNewTenant(unittest.TestCase):
+    def test_ensure_indexes_creates_communities_collection_through_helper(self):
+        """Tenant novo: o primeiro upload falhava com NamespaceNotFound em kg_communities."""
+        from backend import build_graph
+
+        db = mock.MagicMock()
+        with mock.patch.object(build_graph, "_ensure_collection") as ensure, \
+             mock.patch.object(build_graph, "_ensure_search_index"):
+            build_graph.ensure_indexes(db)
+        ensure.assert_any_call(db, "kg_communities", build_graph.COMMUNITY_SCHEMA)
+        self.assertEqual(ensure.call_args_list[0].args[1], "kg_communities")
 
 
 class RetrieveContextDefaultDeny(unittest.TestCase):

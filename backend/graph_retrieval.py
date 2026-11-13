@@ -66,7 +66,7 @@ def build_graph_pipeline(query, *, seeds=SEEDS, hops=HOPS, final_n=8, rerank=Tru
     # perfil (`denied_sources`) não entra nem como ponto de entrada nem como vizinho, e todo
     # trecho de evidência passa pelo mesmo filtro `metadata.nivel_acesso` da busca híbrida.
     # Antes de 2026-11-12 a evidência do grafo não filtrava nível: um upload restrito vazava
-    # para o perfil público pela aba Graph-RAG (medido em scripts/isolation_eval.py).
+    # para o perfil público pela aba Graph-RAG (medido em eval/isolation_eval.py).
     denied = sorted(set(denied_sources or []))
     # `scope` separa o grafo do corpus base ("base") do grafo dos uploads ("uploads"), pela
     # mesma regra das abas: tenant + escopo em todo estágio que lê entidade ou chunk.
@@ -378,7 +378,10 @@ def run_graph(db, query, *, final_n=8, rerank=True, access_levels=None, sources=
                                     access_levels=access_levels, sources=sources, scope=scope,
                                     denied_sources=denied)
     rows = list(db["kg_entities"].aggregate(pipeline))
-    return parse_graph_rows(rows), redact_denied(pipeline, denied)
+    parsed = parse_graph_rows(rows)
+    # Sinaliza à UI que o pipeline exibido não é byte a byte o executado (lista $nin mascarada).
+    parsed["pipeline_redacted"] = bool(denied)
+    return parsed, redact_denied(pipeline, denied)
 
 
 def redact_denied(pipeline, denied):

@@ -34,6 +34,9 @@ export default function ChatMessage({ msg }) {
               operation={detail.operation}
               namespace={detail.namespace}
               query={detail.pipeline}
+              note={detail.pipeline_redacted
+                ? 'nomes de documentos fora do seu perfil mascarados (o filtro executado usa os nomes reais)'
+                : undefined}
             />
           ))}
           {isAssistant && <Sources sources={msg.sources} />}

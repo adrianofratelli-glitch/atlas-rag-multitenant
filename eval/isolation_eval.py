@@ -9,10 +9,14 @@ Corpus 100% sintético (abaixo), sem dado de cliente. Os chunks do tenant B vão
 coleção do tenant A (o pior caso: só o filtro `metadata.client_id` separa os dois). O grafo
 (`kg_entities`) recebe entidades sintéticas dos dois tenants e de um upload restrito.
 
-Uso (o backend precisa estar no ar com CLIENT_ID=tenant_a e o mesmo DB_NAME):
-    DB_NAME=ragmt_iso_test CLIENT_ID=tenant_a RAG_NATIVE=1 python -m eval.isolation_eval --seed --wait
-    DB_NAME=ragmt_iso_test CLIENT_ID=tenant_a RAG_NATIVE=1 uvicorn backend.api:app --port 18180 &
-    DB_NAME=ragmt_iso_test CLIENT_ID=tenant_a python -m eval.isolation_eval --base-url http://127.0.0.1:18180
+Uso (o backend precisa estar no ar com CLIENT_ID=tenant_a, o mesmo DB_NAME e os mesmos
+RAG_AUTH_SECRET/RAG_DEMO_PASSWORD do eval: com o segredo compartilhado, o token do tenant B tem
+assinatura válida e o 401 prova a checagem do `tid`; GRAPH_ON_UPLOAD=0 evita chamadas de LLM no
+upload da sonda de jobs):
+    export DB_NAME=ragmt_iso_test CLIENT_ID=tenant_a RAG_NATIVE=1 RAG_AUTH_SECRET=<hex> RAG_DEMO_PASSWORD=<senha>
+    python -m eval.isolation_eval --seed --wait
+    GRAPH_ON_UPLOAD=0 uvicorn backend.api:app --port 18180 &
+    python -m eval.isolation_eval --base-url http://127.0.0.1:18180
     [--with-llm 4]   # também gera respostas (Grove) e confere canário no texto do modelo
 
 Relatório: stdout + eval/reports/isolation_<data>.json (fora do git).
@@ -164,7 +168,9 @@ def wait_ready(timeout_s: int = 1800) -> bool:
 
 def _headers(client: httpx.Client, base: str, auth_mode) -> dict:
     if auth_mode in ("publico", "restrito"):
-        r = client.post(f"{base}/api/session", json={"level": auth_mode})
+        # O restrito exige a senha de demo (RAG_DEMO_PASSWORD, mesma do backend).
+        r = client.post(f"{base}/api/session",
+                        json={"level": auth_mode, "password": os.getenv("RAG_DEMO_PASSWORD")})
         if r.status_code == 404:  # backend anterior a 2026-11-12: não havia token; o corpo mandava
             return {"X-Legacy-Level": auth_mode}
         return {"Authorization": f"Bearer {r.json()['token']}"}
@@ -250,14 +256,61 @@ def run(base: str, with_llm: int) -> dict:
     # Credenciais forjadas: tem de ser 401, nunca rebaixar em silêncio nem responder.
     from backend import auth
 
-    forged = {"token de outro tenant": auth.issue_token(TENANT_B, "restrito"),
-              "assinatura inválida": "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOiJ0ZW5hbnRfYSIsImx2bCI6InJlc3RyaXRvIn0.x"}
+    # Com RAG_AUTH_SECRET igual ao do backend, o token do tenant B tem assinatura válida e só o
+    # `tid` o barra; sem segredo compartilhado o 401 viria da assinatura (sonda mais fraca).
+    def _b64(obj):
+        import base64
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    now = int(time.time())
+    h = auth.issue_token(TENANT_A, "restrito", ttl_s=60).split(".")[0]
+    expired_claims = {"sub": "x", "tid": TENANT_A, "lvl": "restrito", "iat": now - 7200, "exp": now - 3600}
+    expired = f"{h}.{_b64(expired_claims)}."
+    expired += auth._sign(f"{h}.{_b64(expired_claims)}".encode())
+    forged = {"token de outro tenant (assinatura válida)": auth.issue_token(TENANT_B, "restrito"),
+              "assinatura inválida": "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOiJ0ZW5hbnRfYSIsImx2bCI6InJlc3RyaXRvIn0.x",
+              "alg none": f"{_b64({'alg': 'none'})}.{_b64({'tid': TENANT_A, 'lvl': 'restrito', 'exp': now + 600})}.",
+              "expirado (assinatura válida)": expired}
+    shared_secret = bool(os.getenv("RAG_AUTH_SECRET"))
     forged_ok = 0
     for name, tok in forged.items():
         r = client.post(f"{base}/api/chat", json={"question": QUESTIONS[0]},
                         headers={"Authorization": f"Bearer {tok}"})
         forged_ok += r.status_code == 401
         rows.append({"perfil": f"forjado: {name}", "status": r.status_code})
+
+    # Emissor de demo: restrito sem senha ou com senha errada não sai.
+    session_refused = 0
+    session_probes = [{"level": "restrito"}, {"level": "restrito", "password": "errada"}]
+    for body in session_probes:
+        r = client.post(f"{base}/api/session", json=body)
+        session_refused += r.status_code == 401 and "token" not in r.text
+    session_refused_ok = f"{session_refused}/{len(session_probes)}"
+
+    # Remoção: sem perfil, documento restrito responde igual a inexistente (404) e nada é apagado.
+    db = _db()
+    before_n = db.documents.count_documents({"metadata.source": "upload_reservado"})
+    r_res = client.delete(f"{base}/api/documents/upload_reservado")
+    r_none = client.delete(f"{base}/api/documents/nao_existe_xyz")
+    delete_ok = (r_res.status_code == r_none.status_code == 404 and r_res.json() == r_none.json()
+                 and db.documents.count_documents({"metadata.source": "upload_reservado"}) == before_n)
+
+    # Jobs: upload restrito feito com token restrito não aparece (nem por id) para o público.
+    jobs_ok = None
+    res_headers = _headers(client, base, "restrito")
+    if "Authorization" in res_headers:
+        up = client.post(f"{base}/api/documents", headers=res_headers,
+                         files={"file": (f"job_reservado_{int(time.time())}.md", f"Job reservado {CANARY_UPLOAD}.".encode())},
+                         data={"nivel_acesso": "restrito"})
+        if up.status_code == 200:
+            job_id = up.json()["job_id"]
+            pub_jobs = client.get(f"{base}/api/documents").json()["jobs"]
+            jobs_ok = (all(j.get("job_id") != job_id for j in pub_jobs)
+                       and client.get(f"{base}/api/documents/jobs/{job_id}").status_code == 404
+                       and client.get(f"{base}/api/documents/jobs/{job_id}", headers=res_headers).status_code == 200)
+            up_pub = client.post(f"{base}/api/documents", files={"file": ("x_eval.md", b"x")},
+                                 data={"nivel_acesso": "restrito"})
+            jobs_ok = jobs_ok and up_pub.status_code == 403
 
     # Biblioteca de documentos e histórico.
     pub_docs = {d["source"] for d in client.get(f"{base}/api/documents").json()["documents"]}
@@ -296,6 +349,10 @@ def run(base: str, with_llm: int) -> dict:
         "forged_rejected": f"{forged_ok}/{len(forged)}",
         "documents_listing_leaks": docs_leak,
         "history_acl_ok": history_ok,
+        "forged_shared_secret": shared_secret,
+        "demo_session_restricted_refused": session_refused_ok,
+        "delete_hidden_ok": delete_ok,
+        "jobs_hidden_ok": jobs_ok,
         "restricted_recall": f"{restricted_hits}/{restricted_probes}",
         "injection_chunks_dropped": injection_dropped,
         "graph_degraded_probes": sum(1 for r in rows if r.get("graph_degraded")),
@@ -327,7 +384,9 @@ def main(argv=None) -> int:
     print(f"relatório: {out}")
     llm_leaks = sum(bool(a["tenant_leak"] or a["acl_leak"]) for a in report["llm_answers"])
     ok_probes, planned = map(int, report["probes"].split("/"))
-    failed = (ok_probes != planned or not report["history_acl_ok"] or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
+    sr, sp = report["demo_session_restricted_refused"].split("/")
+    failed = (ok_probes != planned or not report["history_acl_ok"] or sr != sp or not report["delete_hidden_ok"]
+              or report["jobs_hidden_ok"] is False or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
               or report["forged_rejected"].split("/")[0] != report["forged_rejected"].split("/")[1]
               or report["restricted_recall"].split("/")[0] in ("0",))
     return 1 if failed else 0

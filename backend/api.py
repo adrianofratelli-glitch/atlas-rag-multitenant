@@ -556,12 +556,17 @@ def api_config():
         "graph_questions": [_clean(q) for q in GRAPH_QUESTIONS[:8]],
         # O perfil de acesso é decidido no servidor (token); `demo_login` diz se esta instância
         # emite tokens de demonstração em /api/session (produção: RAG_DEMO_LOGIN=0 + IdP).
-        "auth": {"demo_login": auth.DEMO_LOGIN, "levels": list(auth.LEVELS)},
+        "auth": {"demo_login": auth.DEMO_LOGIN, "levels": list(auth.LEVELS),
+                 # Sem senha configurada o emissor só dá o público: a UI explica em vez de tentar.
+                 "restricted_requires_password": True,
+                 "restricted_available": auth.DEMO_LOGIN and bool(auth.DEMO_PASSWORD)},
     }
 
 
 class SessionBody(BaseModel):
     level: Literal["publico", "restrito"] = "publico"
+    # Senha de demo (RAG_DEMO_PASSWORD) — exigida só para níveis acima do público.
+    password: str | None = Field(default=None, max_length=200)
 
 
 @app.post("/api/session")
@@ -573,6 +578,11 @@ def api_session(body: SessionBody):
     """
     if not auth.DEMO_LOGIN:
         raise HTTPException(status_code=404, detail="emissor de demonstração desligado")
+    if not auth.demo_can_issue(body.level, body.password):
+        observability.metrics.bump("auth_demo_refused", 1)
+        detail = ("perfil restrito exige a senha de demonstração" if auth.DEMO_PASSWORD
+                  else "perfil restrito desligado: defina RAG_DEMO_PASSWORD no servidor")
+        raise HTTPException(status_code=401, detail=detail)
     token = auth.issue_token(CLIENT_ID, body.level)
     observability.metrics.bump("auth_demo_tokens", 1)
     return {"token": token, "level": body.level, "expires_in": auth.TOKEN_TTL_S}
@@ -649,7 +659,8 @@ def api_documents(authorization: str | None = Header(default=None)):
         "documents": listing["documents"],
         "truncated": listing["truncated"],
         "total": listing["total"],
-        "jobs": documents.list_jobs(),
+        # Job de upload restrito leva source/filename: só aparece para quem lê o nível.
+        "jobs": [j for j in documents.list_jobs() if j.get("nivel_acesso", "restrito") in levels],
     }
 
 
@@ -682,20 +693,32 @@ async def api_upload_document(
 
 
 @app.get("/api/documents/jobs/{job_id}")
-def api_document_job(job_id: str):
+def api_document_job(job_id: str, authorization: str | None = Header(default=None)):
+    levels = _levels_for(_granted_level(authorization))
     job = documents.get_job(job_id)
-    if not job:
+    # Inexistente e sem permissão respondem igual: o job restrito não se revela.
+    if not job or job.get("nivel_acesso", "restrito") not in levels:
         raise HTTPException(status_code=404, detail="job não encontrado")
     return job
 
 
 @app.delete("/api/documents/{source}")
-def api_delete_document(source: str):
+def api_delete_document(source: str, authorization: str | None = Header(default=None)):
     """Remove every chunk of one uploaded document — demo cleanup.
 
     The tenant's reference corpus is refused: it is what the whole demo reads
     from, and re-ingesting it costs an hour of rate-limited embedding calls.
+    Removing requires a grant that covers every chunk of the document; a document
+    the caller cannot read answers 404, exactly like one that does not exist.
     """
+    granted = _granted_level(authorization)
+    try:
+        doc_levels = documents.source_levels(source)
+    except Exception:
+        logger.exception("document level lookup failed source=%s", source)
+        raise HTTPException(status_code=503, detail="não foi possível remover o documento")
+    if not doc_levels or not auth.can_read(granted, auth.max_level(doc_levels)):
+        raise HTTPException(status_code=404, detail="documento não encontrado")
     try:
         deleted = documents.delete_document(source)
     except documents.ProtectedDocumentError:

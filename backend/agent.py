@@ -354,6 +354,8 @@ def _retrieve_graph(query, levels, sources, final_n, top_k, _capture, scope="bas
             "operation": "aggregate / $rankFusion + $lookup + $graphLookup + $lookup($rerank) + $unionWith",
             "namespace": f"{DB_NAME}.kg_entities",
             "pipeline": pipeline,
+            # True: a lista `$nin` dos documentos fora do perfil aparece como contagem, não nomes.
+            "pipeline_redacted": bool(parsed.get("pipeline_redacted")),
         }],
     }
     if not chunks and not fact_lines:
