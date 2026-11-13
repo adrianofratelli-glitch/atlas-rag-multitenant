@@ -171,8 +171,21 @@ def _headers(client: httpx.Client, base: str, auth_mode) -> dict:
     return {}
 
 
-def _meta_event(client, base, body, headers, full=False):
-    """Lê o SSE até o meta (ou até o fim com `full`): o que a UI mostra e o que vai ao modelo."""
+def _meta_event(client, base, body, headers, full=False, attempts=8):
+    """Lê o SSE até o meta (ou até o fim com `full`): o que a UI mostra e o que vai ao modelo.
+
+    Ao fechar o stream depois do meta, a thread de geração do servidor ainda segura a vaga de
+    concorrência até o próximo evento: sondas em sequência rápida tomam 429. Espera e repete.
+    """
+    for i in range(attempts):
+        status, meta, answer = _meta_event_once(client, base, body, headers, full)
+        if status != 429:
+            return status, meta, answer
+        time.sleep(1.5 * (i + 1))
+    return status, meta, answer
+
+
+def _meta_event_once(client, base, body, headers, full):
     meta, answer = None, ""
     with client.stream("POST", f"{base}/api/chat", json=body, headers=headers, timeout=180) as r:
         if r.status_code != 200:
@@ -203,6 +216,7 @@ def _leaks(blob: str, sources: set, level: str) -> tuple[list, list]:
 def run(base: str, with_llm: int) -> dict:
     client = httpx.Client()
     rows, tenant_leaks, acl_leaks, injection_dropped = [], 0, 0, 0
+    acl_content_leaks = 0  # trecho/canário restrito entregue (não só o nome do documento)
     restricted_hits = restricted_probes = 0
     for label, level, auth_mode in PROFILES:
         headers = _headers(client, base, auth_mode)
@@ -223,6 +237,7 @@ def run(base: str, with_llm: int) -> dict:
                 t, a = _leaks(blob, srcs, level)
                 tenant_leaks += bool(t)
                 acl_leaks += bool(a)
+                acl_content_leaks += level == "publico" and bool({CANARY_RESTRICTED, CANARY_UPLOAD} & set(a) or srcs & RESTRICTED_SOURCES)
                 injection_dropped += int(meta.get("stats", {}).get("injection_dropped") or 0)
                 if level == "restrito" and "AD09" in q and scope in ("all", "base"):
                     restricted_probes += 1
@@ -265,14 +280,19 @@ def run(base: str, with_llm: int) -> dict:
         for q in QUESTIONS[:with_llm]:
             _, meta, answer = _meta_event(client, base, {"question": q, "access_level": "restrito"}, headers, full=True)
             t, a = _leaks(answer, set(), "publico")
+            # Nome que já está na pergunta (o modelo repete o termo para recusar) não é vazamento;
+            # os canários (códigos só presentes nos documentos) continuam valendo.
+            t, a = [m for m in t if m not in q], [m for m in a if m not in q]
             answers.append({"q": q, "tenant_leak": t, "acl_leak": a, "chars": len(answer)})
 
-    probes = sum(1 for r in rows if r.get("status") == 200)
+    probes = sum(1 for r in rows if r.get("status") == 200 and not r["perfil"].startswith("forjado"))
+    planned = len(PROFILES) * len(ENGINES) * len(QUESTIONS)
     return {
         "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "probes": probes,
+        "probes": f"{probes}/{planned}",
         "tenant_leaks": tenant_leaks,
         "acl_leaks": acl_leaks,
+        "acl_content_leaks": acl_content_leaks,
         "forged_rejected": f"{forged_ok}/{len(forged)}",
         "documents_listing_leaks": docs_leak,
         "history_acl_ok": history_ok,
@@ -306,7 +326,8 @@ def main(argv=None) -> int:
     print(json.dumps(summary, ensure_ascii=False, indent=1))
     print(f"relatório: {out}")
     llm_leaks = sum(bool(a["tenant_leak"] or a["acl_leak"]) for a in report["llm_answers"])
-    failed = (not report["history_acl_ok"] or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
+    ok_probes, planned = map(int, report["probes"].split("/"))
+    failed = (ok_probes != planned or not report["history_acl_ok"] or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
               or report["forged_rejected"].split("/")[0] != report["forged_rejected"].split("/")[1]
               or report["restricted_recall"].split("/")[0] in ("0",))
     return 1 if failed else 0

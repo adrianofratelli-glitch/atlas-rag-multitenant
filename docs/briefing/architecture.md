@@ -117,11 +117,13 @@ Dentro de um tenant, dois "espaços de trabalho" isolados na mesma base/coleçã
 
 A fronteira entre os dois é a **presença/ausência do campo `metadata.expires_at`** — nenhum banco, índice ou campo novo foi criado para isso. Ver `queries.md` para os detalhes de índice/TTL e `ui-flows.md` para como isso aparece nas duas abas.
 
-## Controle de acesso (`nivel_acesso`) — conceito só da PoC
+## Controle de acesso (`nivel_acesso`) — decidido no servidor
 
-`"publico"` ou `"restrito"`, escolhido pelo **cliente** na UI (não por autenticação real). Default `publico` nos dois lados (front e back) — o caminho mais permissivo nunca é o default implícito. Filtrado nos dois estágios de busca (vetorial e lexical), como filtro nativo dos índices — nunca depois da fusão, para que conteúdo restrito não influencie sequer o ranqueamento do que o usuário pode ver.
+`"publico"` ou `"restrito"`. Desde 2026-11-12 o nível vem de um **token assinado** (`Authorization: Bearer`, HS256, `backend/auth.py`) com `tid` (tenant), `lvl` e `exp`, verificado no servidor; sem token, só `publico`; token inválido, expirado ou de outro tenant → 401. O `access_level` do corpo só **reduz** o concedido. O botão da UI pede o token a `POST /api/session` (emissor de demonstração; `RAG_DEMO_LOGIN=0` desliga, e em produção o token vem do IdP). Segredo em `RAG_AUTH_SECRET` (sem ele, segredo efêmero por processo). Decisão e alternativas: `docs/adr/0001-perfil-de-acesso-no-servidor.md`.
 
-**Isso não é controle de acesso de produção.** Em um deployment real para o tribunal, isso precisa vir de autenticação real (SSO/JWT) associada a perfil/lotação do usuário — nunca de um campo aceito do corpo da requisição. Ver `## Exposição da API` abaixo.
+O nível concedido filtra todo caminho de leitura: os dois estágios de busca (vetorial e lexical, como filtro nativo dos índices, nunca depois da fusão), o outline, o Graph-RAG (evidência por nível e exclusão das entidades de documentos negados, ver `queries.md`), a listagem de documentos, o escopo do workspace e o histórico (conversa carimbada com `client_id` + `access_level`). Upload `restrito` exige token restrito. `retrieve_context(access_levels=[])` vale só público (antes virava acesso total).
+
+**O que ainda falta para produção:** trocar o emissor de demo por um IdP (SSO, RS256/JWKS) associado a perfil/lotação do usuário. A prova de que nenhum caminho vaza está em `eval/isolation_eval.py` (ao vivo) e `tests/test_access_control.py` (offline).
 
 ## Isolamento de dados multi-tenant (o que importa para dado jurídico)
 

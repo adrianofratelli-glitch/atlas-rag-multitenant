@@ -117,6 +117,8 @@ db.kg_entities.aggregate([
 
 **Escopo:** todo documento do grafo tem `scope` (`"base"` ou `"uploads"`), e todo estágio filtra por ele junto com `client_id`: `filter` do `$vectorSearch`, `equals` do `$search`, `$match` do `$lookup`, `restrictSearchWithMatch` do `$graphLookup`. No escopo `uploads` a evidência exige `metadata.expires_at` presente e `metadata.source` nos documentos marcados; não há comunidades.
 
+**Nível de acesso no grafo** (desde 2026-11-12; `build_graph_pipeline(..., denied_sources=...)`): a evidência (`$lookup` em `documents`) filtra `metadata.nivel_acesso: {"$in": access_levels}`, como a busca híbrida. As entidades não guardam nível; `documents.denied_sources(levels)` faz um `distinct("metadata.source", {client_id, "metadata.nivel_acesso": {"$nin": levels}})` (cache por `corpus_version`) e toda entidade cujo `sources` cita um desses documentos sai de todos os estágios: `{"sources": {"$nin": negados}}` no `filter` do `$vectorSearch`, `mustNot: [{"in": {"path": "sources", ...}}]` no `$search`, e o mesmo `$nin` no `$match` do `$lookup` e no `restrictSearchWithMatch` do `$graphLookup`. Com algum documento negado, as comunidades saem (o sumário é texto gerado sobre várias entidades). Falha fechada: uma entidade citada num documento público e num restrito some para o perfil público. Antes disso, um upload restrito aparecia na aba Graph-RAG do perfil público.
+
 **Escritas (`sync_collection`):** por diferença. Cada documento ganha `hash` do conteúdo; o build lê `{_id, hash}` do escopo, regrava só o que mudou (`ReplaceOne` com `upsert`) e apaga o que sumiu (`DeleteOne`), em `bulk_write` de 500. Reconstruir inteiro fazia o autoEmbed reembedar todas as entidades e deixava a aba sem grafo entre o delete e o insert.
 
 **Passe de duplicatas (`find_duplicate_candidates` + `confirm_merges`):** para cada entidade, um `$vectorSearch` no próprio `kg_vector_index`, filtrado por tipo, devolve os vizinhos com score até 0,05 abaixo do score da própria entidade (piso 0,85; a entidade contra o próprio texto dá ~0,92, não 1,0). Soma-se um sinal léxico: sigla ou alias de uma entidade igual ao nome de outra ("Projudi/PJD" × alias "PJD"), ignorando partes com dígito (o "2021" de "Lei 14.133/2021" ligaria todas as normas do ano). Códigos diferentes nunca viram par. O LLM decide só esses pares, em lotes de 12, com resposta explícita por par; as fusões confirmadas reentram em `graph_extract.resolve(merges=...)`. Cache em `.graph_cache/merges.jsonl` e `confirmed_merges.json` (este invalida sozinho se o critério do prompt mudar). **Veto humano:** `graph_merge_vetoes` no `client_config.json` (pares de nomes, fora do git) impede que dois nomes terminem na mesma entidade, inclusive por transitividade (A = C e C = B); a fusão que violaria o veto é ignorada em `resolve`.
@@ -351,6 +353,8 @@ get_client()[DB_NAME]["documents"].aggregate([
         "nivel_acesso": {"$addToSet": "$metadata.nivel_acesso"},
     }},
     {"$match": {"_id": {"$ne": None}}},
+    # perfil do chamador: documento com algum trecho fora dos níveis concedidos some da lista
+    {"$match": {"nivel_acesso": {"$not": {"$elemMatch": {"$nin": levels}}}}},
     {"$facet": {
         "page": [{"$sort": {"_id": 1}}, {"$limit": 200}],   # DOCUMENTS_LIST_LIMIT
         "count": [{"$count": "n"}],
@@ -370,13 +374,14 @@ get_client()[DB_NAME]["documents"].aggregate([
 get_client()[DB_NAME]["documents"].distinct(
     "metadata.source",
     {"metadata.client_id": CLIENT_ID,
-     "metadata.expires_at": {"$exists": True}},   # True = uploads da demo; False = corpus base
+     "metadata.expires_at": {"$exists": True},   # True = uploads da demo; False = corpus base
+     "metadata.nivel_acesso": {"$in": levels}},  # só documentos com algum trecho legível pelo perfil
 )
 ```
 
 **O que faz:** devolve a lista de `source` (nomes de documento) que pertencem a um dos dois workspaces da UI. `scope == "all"` não roda nada, devolve `None` (sem escopo).
 
-**Por que existe:** é a query que implementa a separação das duas abas da tela (`Corpus de referência` vs. `Novo conteúdo`) **sem criar banco, índice ou campo novo** — só reusa o carimbo TTL que já existia para outro motivo (query 4). Cacheado por `(CLIENT_ID, corpus_version, scope)` para não rodar um `distinct` a cada turno de chat.
+**Por que existe:** é a query que implementa a separação das duas abas da tela (`Corpus de referência` vs. `Novo conteúdo`) **sem criar banco, índice ou campo novo** — só reusa o carimbo TTL que já existia para outro motivo (query 4). Cacheado por `(CLIENT_ID, corpus_version, scope, levels)` para não rodar um `distinct` a cada turno de chat.
 
 ### 11. `is_protected` — dois `count_documents` para proteger o corpus base
 
@@ -473,28 +478,35 @@ onde cada documento tem a forma:
 
 ### 15. `update_one` upsert — persistir turno de conversa
 
-**Onde:** `backend/api.py::_save_conversation` (linha 475; `update_one` na 480).
+**Onde:** `backend/api.py::_save_conversation` (linha 498; `update_one` na 509).
 
 ```python
-get_client()[DB_NAME]["conversations"].update_one(
-    {"_id": thread_id},
-    {"$set": {"client": CLIENT_NAME, "document": DOCUMENT_TITLE,
-              "messages": messages, "updated_at": datetime.now(timezone.utc)}},
+# _conversation_filter(): mesmo _id e tenant ("None" casa conversa legada sem o campo)
+flt = {"_id": thread_id, "client_id": {"$in": [CLIENT_ID, None]}}
+prev = col.find_one(flt, {"access_level": 1})   # perfil menor não sobrescreve thread restrita
+col.update_one(
+    flt,
+    {"$set": {"client": CLIENT_NAME, "client_id": CLIENT_ID, "access_level": access_level,
+              "document": DOCUMENT_TITLE, "messages": messages,
+              "updated_at": datetime.now(timezone.utc)}},
     upsert=True,
 )
 ```
+
+Desde 2026-11-12 a conversa leva o tenant e o nível sob o qual foi produzida.
 
 **Por que existe:** persiste o histórico de conversa no mesmo Atlas (não em Redis/outro serviço) para que `GET /api/history/{thread_id}` retome a conversa após reload de página. Falha de escrita aqui é **engolida de propósito** (try/except silencioso, só loga) — um soluço do banco não pode derrubar o chat em andamento; perder o histórico é aceitável, perder a resposta que está sendo gerada não é.
 
 ### 16. `find_one` — carregar conversa
 
-**Onde:** `backend/api.py::_load_conversation` (linha 494).
+**Onde:** `backend/api.py::_load_conversation` (linha 525).
 
 ```python
-get_client()[DB_NAME]["conversations"].find_one({"_id": thread_id})
+get_client()[DB_NAME]["conversations"].find_one(
+    {"_id": thread_id, "client_id": {"$in": [CLIENT_ID, None]}})
 ```
 
-Limita ao histórico às últimas `MAX_HISTORY_MESSAGES` (16) mensagens ao devolver.
+Só devolve se o nível concedido pelo token (`auth.can_read`) for maior ou igual ao `access_level` da conversa; conversa sem o campo exige o nível mais alto (falha fechada). Limita ao histórico às últimas `MAX_HISTORY_MESSAGES` (16) mensagens ao devolver.
 
 ---
 

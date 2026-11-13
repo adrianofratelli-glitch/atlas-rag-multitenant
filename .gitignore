@@ -68,3 +68,5 @@ eval/reports/llm_review_*
 eval/reports/codex_review_*
 eval/reports/*.bak-*
 eval/reports/human_review_codex.xlsx
+# Eval de isolamento: corpus sintético, mas o relatório completo é por rodada (o resumo vai no README)
+eval/reports/isolation_*.json
