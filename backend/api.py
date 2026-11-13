@@ -107,6 +107,13 @@ def _init_tracing_on_boot():
 
 
 @app.on_event("startup")
+def _cleanup_uploads_on_boot():
+    removed = documents.cleanup_upload_dir()
+    if removed:
+        logger.info("removed %d leftover upload file(s) from a previous process", removed)
+
+
+@app.on_event("startup")
 def _verify_tenant_on_boot():
     """Abort boot if MONGO_URI/DB_NAME point at a database stamped for a
     different tenant — catches a copy-pasted .env / swapped connection string
@@ -731,7 +738,7 @@ def api_delete_document(source: str, authorization: str | None = Header(default=
     if not doc_levels or not auth.can_read(granted, auth.max_level(doc_levels)):
         raise HTTPException(status_code=404, detail="documento não encontrado")
     try:
-        deleted = documents.delete_document(source)
+        deleted = documents.delete_document(source, _levels_for(granted))
     except documents.ProtectedDocumentError:
         raise HTTPException(
             status_code=403,

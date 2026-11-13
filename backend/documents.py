@@ -292,18 +292,40 @@ def delete_upload_graph(source: str) -> int:
         return 0
 
 
-def delete_document(source: str) -> int:
+def delete_document(source: str, levels: list[str] | None = None) -> int:
+    """Apaga os trechos de upload de `source`. `levels` (perfil do chamador) entra no próprio
+    filtro do delete_many: mesmo que um trecho de nível maior apareça entre a checagem da API
+    e o delete, ele não é apagado."""
     if is_protected(source):
         raise ProtectedDocumentError(source)
-    result = get_client()[DB_NAME]["documents"].delete_many(
-        # Belt and braces: even past the guard, only TTL-stamped (uploaded)
-        # chunks can be deleted, so a mixed source can't take the corpus with it.
-        tenant_filter({"metadata.source": source, "metadata.expires_at": {"$exists": True}})
-    )
-    if GRAPH_ON_UPLOAD:
+    flt = {"metadata.source": source, "metadata.expires_at": {"$exists": True}}
+    if levels is not None:
+        flt["metadata.nivel_acesso"] = {"$in": list(levels)}
+    col = get_client()[DB_NAME]["documents"]
+    # Belt and braces: even past the guard, only TTL-stamped (uploaded)
+    # chunks can be deleted, so a mixed source can't take the corpus with it.
+    result = col.delete_many(tenant_filter(flt))
+    # O grafo do upload só sai quando não sobrou trecho nenhum do documento.
+    if GRAPH_ON_UPLOAD and not col.count_documents(tenant_filter({"metadata.source": source}), limit=1):
         delete_upload_graph(source)
     _bump_corpus_version()
     return result.deleted_count
+
+
+_JOB_FILE_RX = re.compile(r"^[0-9a-f]{32}_")
+
+
+def cleanup_upload_dir() -> int:
+    """No boot: apaga só os arquivos de job (`<job_id>_*`) que sobraram de um processo anterior
+    (os jobs viviam em memória e morreram com ele). Outros arquivos da pasta ficam."""
+    if not UPLOAD_DIR.is_dir():
+        return 0
+    removed = 0
+    for f in UPLOAD_DIR.iterdir():
+        if f.is_file() and _JOB_FILE_RX.match(f.name):
+            f.unlink(missing_ok=True)
+            removed += 1
+    return removed
 
 
 def _bump_corpus_version() -> None:

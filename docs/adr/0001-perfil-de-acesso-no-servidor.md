@@ -41,6 +41,9 @@ A avaliação ao vivo de 2026-11-12 (banco `*_test`, tenant B semeado na mesma c
   grava o arquivo em `<job_id>_<source>` e o `reset` da ingestão só apaga trechos dos níveis
   concedidos (trecho de outro nível recusa o job). Sem isso havia uma corrida: com um upload
   restrito na fila, um upload público com o mesmo nome passava na checagem do request.
+- `DELETE` leva os níveis concedidos para dentro do filtro do `delete_many`
+  (`documents.delete_document(source, levels)`), e o boot apaga arquivos de job órfãos
+  (`<job_id>_*`) em `UPLOAD_DIR` (`documents.cleanup_upload_dir`).
 - `POST /api/session` com senha errada ou ausente espera `RAG_DEMO_FAIL_DELAY_S` (1 s) antes do 401.
 
 ## Modelo de ameaça: chamador sem token (varredura das rotas que escrevem, 2026-11-12)

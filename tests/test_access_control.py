@@ -498,3 +498,40 @@ class UploadRaceTests(unittest.TestCase):
             with self.assertRaises(ingest_mod.ProtectedSourceError):
                 ingest_mod.ingest("x.md", reset=True, ttl_hours=24, verbose=False, reset_levels=["publico"])
         col.delete_many.assert_not_called()
+
+
+class DeleteAndUploadDirTests(unittest.TestCase):
+    def test_delete_many_filter_carries_the_callers_levels(self):
+        col = mock.MagicMock()
+        col.delete_many.return_value.deleted_count = 1
+        col.count_documents.return_value = 1  # sobrou trecho de outro nível
+        with mock.patch.object(documents, "is_protected", return_value=False), \
+             mock.patch.object(documents, "get_client", return_value={documents.DB_NAME: {"documents": col}}), \
+             mock.patch.object(documents, "GRAPH_ON_UPLOAD", True), \
+             mock.patch.object(documents, "delete_upload_graph") as dg, \
+             mock.patch.object(documents, "_bump_corpus_version"):
+            documents.delete_document("up", ["publico"])
+        flt = col.delete_many.call_args[0][0]
+        self.assertEqual(flt["metadata.nivel_acesso"], {"$in": ["publico"]})
+        self.assertEqual(flt["metadata.client_id"], documents.CLIENT_ID)
+        dg.assert_not_called()  # grafo do upload fica enquanto houver trecho do documento
+
+    def test_api_delete_passes_granted_levels(self):
+        with mock.patch.object(documents, "source_levels", return_value=["publico"]), \
+             mock.patch.object(documents, "delete_document", return_value=1) as dele:
+            TestClient(api.app).delete("/api/documents/pub")
+        dele.assert_called_once_with("pub", ["publico"])
+
+    def test_boot_cleanup_removes_only_job_files(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            job = d / f"{'a' * 32}_anexo.md"
+            keep = d / "notas.md"
+            job.write_text("x")
+            keep.write_text("y")
+            with mock.patch.object(documents, "UPLOAD_DIR", d):
+                self.assertEqual(documents.cleanup_upload_dir(), 1)
+            self.assertFalse(job.exists())
+            self.assertTrue(keep.exists())
