@@ -24,8 +24,15 @@ A avaliação ao vivo de 2026-11-12 (banco `*_test`, tenant B semeado na mesma c
   verificado em `backend/auth.py`. Sem token: só `publico`. Token com assinatura inválida,
   `alg` diferente de HS256, expirado ou de outro tenant: **401** (nunca rebaixa em silêncio).
 - `access_level` no corpo continua aceito, mas só **reduz** o que o token concede.
-- `POST /api/session` emite o token na demo (o botão de perfil da UI chama esse endpoint).
+- `POST /api/session` emite o token na demo (o botão de perfil da UI chama esse endpoint). O nível
+  público sai sem credencial; o restrito exige `RAG_DEMO_PASSWORD` (comparada com
+  `hmac.compare_digest`). Sem a variável, só o público é emitido (falha fechada) e a UI explica.
   `RAG_DEMO_LOGIN=0` desliga o emissor; em produção o token vem do IdP e só a verificação fica.
+- Jobs de upload restrito e remoção de documento seguem o mesmo nível: job restrito some da
+  lista e responde 404 por id; `DELETE` exige nível que cubra todos os trechos e responde 404
+  igual ao inexistente.
+- O pipeline do Graph-RAG exibido na UI troca a lista `$nin` de documentos negados por uma
+  contagem e marca `pipeline_redacted: true`.
 - Segredo em `RAG_AUTH_SECRET`; sem ele, cada processo sorteia um segredo efêmero (não existe
   segredo padrão conhecido; tokens morrem no restart).
 - O mesmo nível concedido filtra todo caminho de leitura: busca híbrida, outline, Graph-RAG
@@ -46,9 +53,9 @@ A avaliação ao vivo de 2026-11-12 (banco `*_test`, tenant B semeado na mesma c
 
 ## Consequências
 
-- A demo continua com o botão público/restrito, agora mediado pelo servidor; com
-  `RAG_DEMO_LOGIN=1` (padrão da PoC) qualquer pessoa ainda pode pedir um token restrito: a
-  diferença é que a decisão e o contrato estão no servidor, prontos para trocar o emissor pelo IdP.
+- A demo continua com o botão público/restrito, agora mediado pelo servidor; o restrito pede a
+  senha de demo. Uma senha compartilhada não é identidade: em produção, `RAG_DEMO_LOGIN=0` e o
+  token vem do IdP. Sem `RAG_DEMO_PASSWORD` configurada, a demo mostra só o perfil público.
 - Conversas antigas sem `access_level` só são lidas por perfil restrito (falha fechada).
 - Medição: `eval/isolation_eval.py` (canários de tenant e de nível, injeção em documento,
   credenciais forjadas, listagem, histórico). Regressões offline em `tests/test_access_control.py`.

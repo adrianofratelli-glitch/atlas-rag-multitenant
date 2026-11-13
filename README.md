@@ -86,7 +86,7 @@ If one of the two indexes fails, the other carries the query. The stable instruc
 
 Ingestion accepts PDF, DOCX, TXT, CSV, Markdown, HTML, JSON, XLSX, and PPTX, through the CLI (`backend/ingest.py`) or the UI upload, which enqueues a job and reports progress at `/api/documents/jobs/{job_id}`. The job is reported `done` only when both indexes return the new document (`$searchMeta` count of its chunks and a `$vectorSearch` restricted to it, tenant-filtered); until then it stays in phase `indexing` and the UI says the indexes are syncing. If they take longer than `UPLOAD_INDEX_WAIT_S` (120 s) the job finishes with `searchable: false` and the UI keeps a "still syncing" notice instead of announcing it as ready. Documents live in the same collection, separated by `metadata.source`, which is a filter field in both search indexes.
 
-> The access level is decided **server-side**: the profile button asks `POST /api/session` for a signed token (HS256, tenant + level + expiry) and every call sends it as `Authorization: Bearer`. No token means public only; an invalid, expired or other-tenant token gets 401; an `access_level` in the body can only lower the grant. `/api/session` is a demo issuer (`RAG_DEMO_LOGIN=0` turns it off); in production the token comes from your IdP. See [ADR 0001](docs/adr/0001-perfil-de-acesso-no-servidor.md).
+> The access level is decided **server-side**: the profile button asks `POST /api/session` for a signed token (HS256, tenant + level + expiry) and every call sends it as `Authorization: Bearer`. No token means public only; an invalid, expired or other-tenant token gets 401; an `access_level` in the body can only lower the grant. `/api/session` is a demo issuer: the public level needs nothing, the restricted level needs the demo password (`RAG_DEMO_PASSWORD`, compared in constant time; the UI asks for it when you switch to `restrito`). Without that variable the issuer only hands out public tokens (fails closed). `RAG_DEMO_LOGIN=0` turns the issuer off; in production the token comes from your IdP. See [ADR 0001](docs/adr/0001-perfil-de-acesso-no-servidor.md).
 
 ## Run it
 
@@ -130,7 +130,7 @@ The TTL sets `metadata.expires_at` **only** on chunks uploaded through the UI. T
 
 Uploads run on a single worker: the same VoyageAI quota limits ingestion, so jobs queue instead of competing. A large document takes minutes on the free tier; in a live demo prefer small files or a paid key with a low `VOYAGE_SLEEP_S`.
 
-Tests: `python -m unittest discover -s tests -v` (218 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
+Tests: `python -m unittest discover -s tests -v` (227 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
 
 ## Native retrieval on MongoDB 9
 
@@ -253,13 +253,16 @@ Refusal is classified by an **LLM judge** (`eval/refusal_judge.py`), with the re
 | restricted passage/canary reaching a public profile (120 probes) | 72 | 0 |
 | ... of which with no claim at all, only Graph-RAG | 32 | 0 |
 | restricted document name in a public response (query panel) | 104 | 0 |
-| forged/other-tenant tokens rejected (401) | 0/2 | 2/2 |
+| forged tokens rejected with 401 (other tenant with a valid signature, bad signature, `alg: none`, expired) | 0/2 | 4/4 |
+| restricted demo token without/with a wrong password refused | n/a | 2/2 |
+| public `DELETE` of a restricted upload answers like a missing one, nothing deleted | n/a | yes |
+| restricted upload job hidden from the public list and `GET /jobs/{id}` | n/a | yes |
 | restricted names in the public document list | 2 | 0 |
 | restricted conversation readable by public | yes | no |
 | restricted profile still finds the restricted annex | 6/6 | 6/6 |
 | injected chunks dropped before the prompt | 96 | 96 |
 
-Tenant isolation already held before (the `client_id` pre-filter); the access level did not. Content leaks before came from the body-claimed level (40 probes) and from Graph-RAG, whose evidence and entities ignored the level even for an honest public caller (32 probes). Names leaked through the query panel (the workspace source list was not level-filtered; the first version of the fix then echoed the graph's `$nin` list, now shown as a count), the document list and the open history. LLM answers checked after: 6 full answers from a public token, none with a canary.
+Tenant isolation already held before (the `client_id` pre-filter); the access level did not. Content leaks before came from the body-claimed level (40 probes) and from Graph-RAG, whose evidence and entities ignored the level even for an honest public caller (32 probes). Names leaked through the query panel (the workspace source list was not level-filtered; the first version of the fix then echoed the graph's `$nin` list, now shown as a count), the document list and the open history. LLM answers checked after: 6 full answers from a public token, none with a canary. `n/a`: the probe did not exist on `main` (no demo issuer, no auth on jobs or delete).
 
 Methodology and reproduction: `./eval/run_all.sh` runs everything. There are **two venvs**: `.venv` (retrieval, generation) and `.venv-eval` (Ragas and Presidio, which require a `numpy`/`langchain-community` downgrade incompatible with the main one). Full reports are generated locally in `eval/reports/` (not versioned).
 
@@ -278,6 +281,7 @@ Resilience is on by default; each variable only tunes or disables it. Tracing an
 | `LLM_STREAM_MAX_ATTEMPTS` | `3` | Claude retry **only before the first token** (429, 5xx, timeout); after that, retrying would duplicate the answer already sent; `1` disables |
 | `STREAM_DEADLINE_S` | `120` | generation ceiling; when exceeded, a readable SSE `error` event instead of a hanging connection; `0` disables |
 | `RAG_DEMO_LOGIN` | `1` | `POST /api/session` issues demo tokens for the profile button; `0` disables it (production: tokens come from your IdP) |
+| `RAG_DEMO_PASSWORD` | unset | password for a **restricted** demo token; unset = the issuer only gives public tokens and the UI explains why |
 | `RAG_AUTH_SECRET` | random per process | HS256 key for access tokens; set a fixed one to keep tokens valid across restarts or share them with an issuer |
 | `RAG_AUTH_TOKEN_TTL_S` | `28800` | access-token lifetime |
 | `RAG_INJECTION_FILTER` | `1` | drops retrieved passages with a prompt-injection pattern before the prompt (offline heuristic, also when the instruction is buried in a long legitimate passage); `0` disables |
@@ -301,7 +305,7 @@ The native path was attacked on purpose before release. Everything below was run
 
 ## Production boundary
 
-Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access level comes from a server-verified token and filters every read path (hybrid, outline, Graph-RAG, document list, history); restricted upload requires a restricted token. The demo issuer (`/api/session`, on by default) still hands a restricted token to anyone who asks: turn it off with `RAG_DEMO_LOGIN=0` and issue tokens from your IdP, with a fixed `RAG_AUTH_SECRET`. Public upload and deletion of uploads remain open: anyone who reaches the API indexes or removes uploaded documents. The reference corpus is protected on both ends: it cannot be deleted through the API (403), and an upload whose name matches a reference document is refused (422), because re-indexing it would have deleted the corpus. An external deployment requires the token to be issued by SSO (RS256/JWKS instead of the demo HS256 issuer).
+Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access level comes from a server-verified token and filters every read path (hybrid, outline, Graph-RAG, document list, history); restricted upload requires a restricted token. The demo issuer (`/api/session`) gives the restricted level only with `RAG_DEMO_PASSWORD`; a shared demo password is still not identity: turn it off with `RAG_DEMO_LOGIN=0` and issue tokens from your IdP, with a fixed `RAG_AUTH_SECRET`. Restricted upload jobs (name, file, level) are visible only to a restricted grant, and deleting a document requires a grant covering all its chunks (otherwise 404, the same answer as a missing document). Public uploads can still be added or removed by anyone who reaches the API. The reference corpus is protected on both ends: it cannot be deleted through the API (403), and an upload whose name matches a reference document is refused (422), because re-indexing it would have deleted the corpus. An external deployment requires the token to be issued by SSO (RS256/JWKS instead of the demo HS256 issuer).
 
 ## Adding a tenant
 
