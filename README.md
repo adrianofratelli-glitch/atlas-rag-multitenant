@@ -130,7 +130,7 @@ The TTL sets `metadata.expires_at` **only** on chunks uploaded through the UI. T
 
 Uploads run on a single worker: the same VoyageAI quota limits ingestion, so jobs queue instead of competing. A large document takes minutes on the free tier; in a live demo prefer small files or a paid key with a low `VOYAGE_SLEEP_S`.
 
-Tests: `python -m unittest discover -s tests -v` (231 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
+Tests: `python -m unittest discover -s tests -v` (234 tests, pure logic, no live services; `tests/test_hardening_adversarial.py` is the adversarial suite: tenant filters, hostile input, indirect injection, gateway/Voyage/Atlas failures, checkpoint hygiene). Quantitative eval: `./eval/run_all.sh` (see "Quality and governance").
 
 ## Native retrieval on MongoDB 9
 
@@ -256,6 +256,7 @@ Refusal is classified by an **LLM judge** (`eval/refusal_judge.py`), with the re
 | forged tokens rejected with 401 (other tenant with a valid signature, bad signature, `alg: none`, expired) | 0/2 | 4/4 |
 | restricted demo token without/with a wrong password refused (each after a 1 s delay) | n/a | 2/2 |
 | public upload reusing a restricted upload's name (with and without `reset`): same 404, nothing written | n/a | yes |
+| race: public `reset` right behind a queued restricted upload; the restricted one survives | n/a | yes |
 | public `DELETE` of a restricted upload answers like a missing one, nothing deleted | n/a | yes |
 | restricted upload job hidden from the public list and `GET /jobs/{id}` | n/a | yes |
 | restricted names in the public document list | 2 | 0 |
@@ -306,7 +307,7 @@ The native path was attacked on purpose before release. Everything below was run
 
 ## Production boundary
 
-Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access level comes from a server-verified token and filters every read path (hybrid, outline, Graph-RAG, document list, history); restricted upload requires a restricted token. The demo issuer (`/api/session`) gives the restricted level only with `RAG_DEMO_PASSWORD`; a shared demo password is still not identity: turn it off with `RAG_DEMO_LOGIN=0` and issue tokens from your IdP, with a fixed `RAG_AUTH_SECRET`. Restricted upload jobs (name, file, level) are visible only to a restricted grant, and deleting a document requires a grant covering all its chunks (otherwise 404, the same answer as a missing document). Public uploads can still be added or removed by anyone who reaches the API, but an upload that reuses the name of a document the caller cannot read gets 404 before anything is written (it used to wipe the restricted chunks with `reset=true`). The threat-model table for a caller without a token is in ADR 0001. The reference corpus is protected on both ends: it cannot be deleted through the API (403), and an upload whose name matches a reference document is refused (422), because re-indexing it would have deleted the corpus. An external deployment requires the token to be issued by SSO (RS256/JWKS instead of the demo HS256 issuer).
+Chat history, outline size, output tokens, and concurrent RAG streams are bounded; the image runs as UID 10001 behind nginx with security headers. The access level comes from a server-verified token and filters every read path (hybrid, outline, Graph-RAG, document list, history); restricted upload requires a restricted token. The demo issuer (`/api/session`) gives the restricted level only with `RAG_DEMO_PASSWORD`; a shared demo password is still not identity: turn it off with `RAG_DEMO_LOGIN=0` and issue tokens from your IdP, with a fixed `RAG_AUTH_SECRET`. Restricted upload jobs (name, file, level) are visible only to a restricted grant, and deleting a document requires a grant covering all its chunks (otherwise 404, the same answer as a missing document). Public uploads can still be added or removed by anyone who reaches the API, but an upload that reuses the name of a document (or of a queued job) the caller cannot read gets 404 before anything is written (it used to wipe the restricted chunks with `reset=true`); the worker re-checks it, each job has its own file, and a reset only deletes the levels the caller can read. The threat-model table for a caller without a token is in ADR 0001. The reference corpus is protected on both ends: it cannot be deleted through the API (403), and an upload whose name matches a reference document is refused (422), because re-indexing it would have deleted the corpus. An external deployment requires the token to be issued by SSO (RS256/JWKS instead of the demo HS256 issuer).
 
 ## Adding a tenant
 

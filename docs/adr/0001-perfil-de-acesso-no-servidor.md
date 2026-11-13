@@ -36,7 +36,11 @@ A avaliação ao vivo de 2026-11-12 (banco `*_test`, tenant B semeado na mesma c
 - Upload com nome de documento que o chamador não lê (algum trecho acima do nível concedido)
   responde 404 antes de qualquer escrita, com e sem `reset`; antes, `reset=true` sem token
   apagava os trechos restritos e gravava conteúdo público no lugar. O erro "já indexado" não
-  traz mais contagem de trechos.
+  traz mais contagem de trechos. A checagem se repete no worker de ingestão (serializado), conta
+  também jobs na fila ou em andamento com o mesmo nome num nível que o chamador não lê, cada job
+  grava o arquivo em `<job_id>_<source>` e o `reset` da ingestão só apaga trechos dos níveis
+  concedidos (trecho de outro nível recusa o job). Sem isso havia uma corrida: com um upload
+  restrito na fila, um upload público com o mesmo nome passava na checagem do request.
 - `POST /api/session` com senha errada ou ausente espera `RAG_DEMO_FAIL_DELAY_S` (1 s) antes do 401.
 
 ## Modelo de ameaça: chamador sem token (varredura das rotas que escrevem, 2026-11-12)
