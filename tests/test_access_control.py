@@ -137,7 +137,7 @@ class SessionAndHistoryTests(unittest.TestCase):
 
     def test_failed_session_is_delayed_and_success_is_not(self):
         with mock.patch.object(auth, "DEMO_PASSWORD", "s3nha"), \
-             mock.patch.object(api.time, "sleep") as sleep:
+             mock.patch.object(api.asyncio, "sleep", new=mock.AsyncMock()) as sleep:
             client = TestClient(api.app)
             self.assertEqual(client.post("/api/session", json={"level": "restrito", "password": "x"}).status_code, 401)
             sleep.assert_called_once_with(api.DEMO_FAIL_DELAY_S)
@@ -403,3 +403,98 @@ class RetrieveContextDefaultDeny(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UploadRaceTests(unittest.TestCase):
+    """Revisão 3 (TOCTOU): checar nível só no request deixava uma janela. Com um upload restrito
+    na fila, um chamador sem token mandava o mesmo nome com reset=true: sobrescrevia o arquivo
+    em disco (o job restrito gravava o conteúdo dele como restrito) ou o job dele apagava os
+    trechos restritos (o reset não filtrava nível)."""
+
+    def setUp(self):
+        self.store = []  # trechos gravados: {"source", "nivel", "text"}
+        self.queue = []
+        self.jobs_backup = dict(documents._jobs)
+        documents._jobs.clear()
+
+    def tearDown(self):
+        documents._jobs.clear()
+        documents._jobs.update(self.jobs_backup)
+
+    def _levels(self, source):
+        return sorted({c["nivel"] for c in self.store if c["source"] == source})
+
+    def _fake_ingest(self, path, reset=False, nivel_acesso="publico", source_name=None,
+                     reset_levels=None, **kw):
+        from backend.ingest import AlreadyIndexedError, ProtectedSourceError
+
+        mine = [c for c in self.store if c["source"] == source_name]
+        if reset_levels is not None and any(c["nivel"] not in reset_levels for c in mine):
+            raise ProtectedSourceError(source_name)
+        if mine and not reset:
+            raise AlreadyIndexedError(source_name, len(mine))
+        self.store[:] = [c for c in self.store if c["source"] != source_name]
+        self.store.append({"source": source_name, "nivel": nivel_acesso,
+                           "text": Path(path).read_bytes().decode()})
+        return {"chunks": 1, "expires_at": None}
+
+    def _patches(self):
+        ex = mock.MagicMock()
+        ex.submit.side_effect = lambda fn, *a: self.queue.append((fn, a))
+        return [mock.patch.object(documents, "_executor", ex),
+                mock.patch.object(documents, "source_levels", side_effect=self._levels),
+                mock.patch.object(documents, "is_protected", return_value=False),
+                mock.patch.object(documents, "ingest", side_effect=self._fake_ingest),
+                mock.patch.object(documents, "wait_until_searchable", return_value=True),
+                mock.patch.object(documents, "GRAPH_ON_UPLOAD", False),
+                mock.patch.object(documents, "_bump_corpus_version")]
+
+    def _run(self, fn):
+        import contextlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as st:
+            st.enter_context(mock.patch.object(documents, "UPLOAD_DIR", Path(tmp)))
+            for p in self._patches():
+                st.enter_context(p)
+            return fn()
+
+    def test_pending_restricted_job_blocks_public_upload_of_same_name(self):
+        def scenario():
+            documents.start_ingestion("anexo.md", b"SEGREDO", nivel_acesso="restrito",
+                                      granted_level="restrito")
+            with self.assertRaises(documents.SourceNotAccessibleError):
+                documents.start_ingestion("anexo.md", b"publico", nivel_acesso="publico", reset=True)
+            for fn, args in self.queue:
+                fn(*args)
+        self._run(scenario)
+        self.assertEqual(self.store, [{"source": "anexo", "nivel": "restrito", "text": "SEGREDO"}])
+
+    def test_worker_rechecks_and_restricted_survives_two_queued_jobs(self):
+        """Os dois jobs entram na fila (a checagem do request é contornada de propósito); o
+        worker roda o restrito, depois o público com reset: o restrito sobrevive."""
+        def scenario():
+            documents.start_ingestion("anexo.md", b"SEGREDO", nivel_acesso="restrito",
+                                      granted_level="restrito")
+            with mock.patch.object(documents, "_source_writable", return_value=True):
+                pub = documents.start_ingestion("anexo.md", b"publico", nivel_acesso="publico", reset=True)
+            paths = [args[1] for _, args in self.queue]
+            self.assertEqual(len(set(paths)), 2)  # arquivo por job: um não sobrescreve o outro
+            for fn, args in self.queue:
+                fn(*args)
+            return documents.get_job(pub["job_id"])
+        job = self._run(scenario)
+        self.assertEqual(self.store, [{"source": "anexo", "nivel": "restrito", "text": "SEGREDO"}])
+        self.assertEqual((job["status"], job["error"]), ("error", documents.SOURCE_UNAVAILABLE))
+        self.assertNotIn("granted_level", job)
+
+    def test_ingest_reset_never_deletes_levels_outside_the_grant(self):
+        from backend import ingest as ingest_mod
+
+        col = mock.MagicMock()
+        col.count_documents.side_effect = lambda flt, **k: 1  # existe e há trecho fora do perfil
+        with mock.patch.object(ingest_mod, "get_client", return_value={ingest_mod.DB_NAME: {"documents": col}}), \
+             mock.patch.object(Path, "exists", return_value=True):
+            with self.assertRaises(ingest_mod.ProtectedSourceError):
+                ingest_mod.ingest("x.md", reset=True, ttl_hours=24, verbose=False, reset_levels=["publico"])
+        col.delete_many.assert_not_called()

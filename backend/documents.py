@@ -377,7 +377,7 @@ def wait_until_searchable(source: str, expected_chunks: int, *, timeout_s: float
 
 
 def _snapshot(job: dict) -> dict:
-    return {k: v for k, v in job.items() if k != "path"}
+    return {k: v for k, v in job.items() if k not in ("path", "granted_level")}
 
 
 def get_job(job_id: str) -> dict | None:
@@ -426,9 +426,8 @@ def start_ingestion(
     validate_extension(filename)
     validate_size(len(content))
     source = safe_source_name(filename)
-    existing_levels = source_levels(source)
-    if existing_levels and not auth.can_read(granted_level, auth.max_level(existing_levels)):
-        raise SourceNotAccessibleError("nome de documento indisponível; renomeie o arquivo")
+    if not _source_writable(source, granted_level):
+        raise SourceNotAccessibleError(SOURCE_UNAVAILABLE)
     # An upload named like a reference-corpus document (e.g. the same file sent again
     # with "reindex" ticked) would reach ingest(reset=True), whose delete_many by
     # metadata.source wiped the tenant's base corpus. Refuse it before any work.
@@ -438,11 +437,13 @@ def start_ingestion(
             "Renomeie o arquivo para enviá-lo como conteúdo novo."
         )
 
+    job_id = uuid4().hex
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    path = UPLOAD_DIR / f"{source}{Path(filename).suffix.lower()}"
+    # Arquivo por job: dois uploads do mesmo nome nunca gravam no mesmo caminho (um job
+    # restrito na fila ingeria o arquivo que outro chamador acabou de sobrescrever).
+    path = UPLOAD_DIR / f"{job_id}_{source}{Path(filename).suffix.lower()}"
     path.write_bytes(content)
 
-    job_id = uuid4().hex
     job = {
         "job_id": job_id,
         "source": source,
@@ -457,21 +458,50 @@ def start_ingestion(
         "created_at": time.time(),
         "finished_at": None,
         "path": str(path),
+        "granted_level": granted_level,
     }
     with _jobs_lock:
         _jobs[job_id] = job
         _prune_locked()
 
-    _executor.submit(_run_job, job_id, str(path), source, nivel_acesso, reset)
+    _executor.submit(_run_job, job_id, str(path), source, nivel_acesso, reset, granted_level)
     return _snapshot(job)
 
 
-def _run_job(job_id: str, path: str, source: str, nivel_acesso: str, reset: bool) -> None:
+SOURCE_UNAVAILABLE = "nome de documento indisponível; renomeie o arquivo"
+
+
+def _source_writable(source: str, granted_level: str, *, ignore_job: str | None = None) -> bool:
+    """O chamador pode gravar sob `source`? Não se houver trecho gravado OU job pendente/em
+    andamento com esse nome num nível que ele não lê (o segundo fecha a janela em que o job
+    restrito ainda não gravou nada e a checagem de trechos passaria)."""
+    from backend import auth
+
+    existing = source_levels(source)
+    if existing and not auth.can_read(granted_level, auth.max_level(existing)):
+        return False
+    with _jobs_lock:
+        for jid, j in _jobs.items():
+            if (jid != ignore_job and j.get("source") == source and j.get("status") in ("queued", "running")
+                    and not auth.can_read(granted_level, j.get("nivel_acesso"))):
+                return False
+    return True
+
+
+def _run_job(job_id: str, path: str, source: str, nivel_acesso: str, reset: bool,
+             granted_level: str = "publico") -> None:
+    from backend import auth
+    from backend.ingest import ProtectedSourceError
+
     def on_progress(phase: str, done: int, total: int):
         _update(job_id, phase=phase, done=done, total=total)
 
     _update(job_id, status="running", phase="loading")
     try:
+        # Rechecagem no worker (um só, serializado): entre o request e aqui outro job pode ter
+        # gravado o mesmo nome num nível que este chamador não lê.
+        if not _source_writable(source, granted_level, ignore_job=job_id):
+            raise SourceNotAccessibleError(SOURCE_UNAVAILABLE)
         result = ingest(
             path,
             reset=reset,
@@ -480,6 +510,9 @@ def _run_job(job_id: str, path: str, source: str, nivel_acesso: str, reset: bool
             on_progress=on_progress,
             verbose=False,
             ttl_hours=UPLOAD_TTL_HOURS,
+            # O reset só apaga o que o chamador lê; trecho de outro nível recusa a ingestão.
+            reset_levels=auth.levels_for(granted_level),
+            file_name=f"{source}{Path(path).suffix}",
         )
         # Chunks are in the collection: the listing and the scope may see the
         # source now, but the job stays "running/indexing" until a query finds it.
@@ -505,7 +538,9 @@ def _run_job(job_id: str, path: str, source: str, nivel_acesso: str, reset: bool
             finished_at=time.time(),
         )
         _bump_corpus_version()
-    except AlreadyIndexedError as e:
+    except (SourceNotAccessibleError, ProtectedSourceError):
+        _update(job_id, status="error", phase="error", error=SOURCE_UNAVAILABLE, finished_at=time.time())
+    except AlreadyIndexedError:
         _update(
             job_id,
             status="error",

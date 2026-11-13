@@ -326,6 +326,28 @@ def run(base: str, with_llm: int) -> dict:
                                  data={"nivel_acesso": "restrito"})
             jobs_ok = jobs_ok and up_pub.status_code == 403
 
+    # Corrida (TOCTOU): upload restrito na fila e, logo atrás, o mesmo nome público com reset sem
+    # token. O público tem de levar 404 e o restrito tem de terminar gravado como restrito.
+    race_ok = None
+    if "Authorization" in res_headers:
+        name = f"corrida_{int(time.time())}"
+        secret = f"Corrida reservada {CANARY_UPLOAD}."
+        r_res = client.post(f"{base}/api/documents", headers=res_headers,
+                            files={"file": (f"{name}.md", secret.encode())}, data={"nivel_acesso": "restrito"})
+        r_pub = client.post(f"{base}/api/documents", files={"file": (f"{name}.md", b"# publico por cima")},
+                            data={"nivel_acesso": "publico", "reset": "true"})
+        if r_res.status_code == 200:
+            jid = r_res.json()["job_id"]
+            for _ in range(120):
+                st = client.get(f"{base}/api/documents/jobs/{jid}", headers=res_headers).json()
+                if st.get("status") in ("done", "error"):
+                    break
+                time.sleep(2)
+            chunks = list(db.documents.find({"metadata.source": name}, {"text": 1, "metadata.nivel_acesso": 1}))
+            race_ok = (r_pub.status_code == 404 and bool(chunks)
+                       and all(c["metadata"]["nivel_acesso"] == "restrito" and CANARY_UPLOAD in c["text"]
+                               for c in chunks))
+
     # Biblioteca de documentos e histórico.
     pub_docs = {d["source"] for d in client.get(f"{base}/api/documents").json()["documents"]}
     res_docs = {d["source"] for d in client.get(
@@ -368,6 +390,7 @@ def run(base: str, with_llm: int) -> dict:
         "delete_hidden_ok": delete_ok,
         "public_overwrite_blocked_ok": overwrite_ok,
         "jobs_hidden_ok": jobs_ok,
+        "upload_race_ok": race_ok,
         "restricted_recall": f"{restricted_hits}/{restricted_probes}",
         "injection_chunks_dropped": injection_dropped,
         "graph_degraded_probes": sum(1 for r in rows if r.get("graph_degraded")),
@@ -402,7 +425,7 @@ def main(argv=None) -> int:
     sr, sp = report["demo_session_restricted_refused"].split("/")
     failed = (ok_probes != planned or not report["history_acl_ok"] or sr != sp or not report["delete_hidden_ok"]
               or not report["public_overwrite_blocked_ok"]
-              or report["jobs_hidden_ok"] is False or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
+              or report["jobs_hidden_ok"] is False or report["upload_race_ok"] is False or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
               or report["forged_rejected"].split("/")[0] != report["forged_rejected"].split("/")[1]
               or report["restricted_recall"].split("/")[0] in ("0",))
     return 1 if failed else 0

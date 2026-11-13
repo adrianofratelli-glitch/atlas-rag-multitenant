@@ -171,8 +171,15 @@ def ingest(
     on_progress=None,
     verbose: bool = True,
     ttl_hours: float | None = None,
+    reset_levels: list[str] | None = None,
+    file_name: str | None = None,
 ) -> dict:
     """Index one file into the tenant's `documents` collection.
+
+    reset_levels (upload pela API): o reset só apaga trechos desses níveis, e se o documento
+    tiver trecho de outro nível a ingestão é recusada (`ProtectedSourceError`) em vez de
+    misturar ou apagar o que o chamador não lê. file_name: nome exibido em `metadata.file`
+    (o upload grava em disco com prefixo do job).
 
     Shared by the CLI and by the upload endpoint (`backend/documents.py`), which
     passes `on_progress(phase, done, total)` to drive the progress bar in the UI.
@@ -208,8 +215,15 @@ def ingest(
     if existing > 0 and not reset:
         raise AlreadyIndexedError(source_name, existing)
 
+    if reset_levels is not None and existing > 0 and collection.count_documents(
+            {**tenant, "metadata.source": source_name,
+             "metadata.nivel_acesso": {"$nin": list(reset_levels)}}, limit=1):
+        raise ProtectedSourceError(source_name)
+
     if reset and existing > 0:
         reset_filter = {**tenant, "metadata.source": source_name}
+        if reset_levels is not None:
+            reset_filter["metadata.nivel_acesso"] = {"$in": list(reset_levels)}
         if ttl_hours and ttl_hours > 0:
             # Disposable (TTL) ingestion only ever replaces disposable chunks: a reset here
             # must not take a permanent (reference-corpus) document with the same name.
@@ -245,7 +259,7 @@ def ingest(
 
     if auto:
         for c in chunks:
-            c.metadata["file"] = path.name
+            c.metadata["file"] = file_name or path.name
         log("Inserting chunks (Atlas generates the embeddings via autoEmbed)...")
         progress("embedding", 0, len(chunks))
         inserted = insert_chunks_auto(collection, chunks, source_name, nivel_acesso, expires_at, on_progress)
@@ -254,7 +268,7 @@ def ingest(
         return {
             "source": source_name,
             "chunks": inserted,
-            "file": path.name,
+            "file": file_name or path.name,
             "expires_at": expires_at.isoformat() if expires_at else None,
         }
 
@@ -277,7 +291,7 @@ def ingest(
             metadata = {
                 "source": source_name,
                 "client_id": CLIENT_ID,
-                "file": path.name,
+                "file": file_name or path.name,
                 "page": batch_chunks[j].metadata.get("page", 0),
                 "chunk_id": i + j,
                 # Access level used by the $vectorSearch / Atlas Search filter.

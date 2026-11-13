@@ -10,6 +10,7 @@ Reuses:
 
 Run:  uvicorn backend.api:app --reload --port 8180  (from the project root)
 """
+import asyncio
 import logging
 import os
 import re
@@ -573,7 +574,7 @@ class SessionBody(BaseModel):
 
 
 @app.post("/api/session")
-def api_session(body: SessionBody):
+async def api_session(body: SessionBody):
     """Emissor de demonstração: devolve um token assinado para o perfil pedido.
 
     Substitui o antigo `access_level` livre no corpo do chat: o chat passa a confiar só no
@@ -583,8 +584,8 @@ def api_session(body: SessionBody):
         raise HTTPException(status_code=404, detail="emissor de demonstração desligado")
     if not auth.demo_can_issue(body.level, body.password):
         observability.metrics.bump("auth_demo_refused", 1)
-        # Atraso fixo em toda falha: força bruta na senha fica lenta (roda no threadpool, não trava o resto).
-        time.sleep(DEMO_FAIL_DELAY_S)
+        # Atraso fixo em toda falha: força bruta na senha fica lenta (assíncrono: não prende thread).
+        await asyncio.sleep(DEMO_FAIL_DELAY_S)
         detail = ("perfil restrito exige a senha de demonstração" if auth.DEMO_PASSWORD
                   else "perfil restrito desligado: defina RAG_DEMO_PASSWORD no servidor")
         raise HTTPException(status_code=401, detail=detail)
