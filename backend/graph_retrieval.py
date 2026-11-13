@@ -394,7 +394,8 @@ def redact_denied(pipeline, denied):
     if not denied:
         return pipeline
     target = sorted(set(denied))
-    marker = [f"<{len(target)} documento(s) fora do perfil>"]
+    # Sem contagem: nem o número de documentos negados chega ao perfil que não os lê.
+    marker = ["<documentos fora do perfil>"]
 
     def walk(node):
         if isinstance(node, dict):

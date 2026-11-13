@@ -563,6 +563,9 @@ def api_config():
     }
 
 
+DEMO_FAIL_DELAY_S = max(0.0, float(os.getenv("RAG_DEMO_FAIL_DELAY_S", "1.0")))
+
+
 class SessionBody(BaseModel):
     level: Literal["publico", "restrito"] = "publico"
     # Senha de demo (RAG_DEMO_PASSWORD) — exigida só para níveis acima do público.
@@ -580,6 +583,8 @@ def api_session(body: SessionBody):
         raise HTTPException(status_code=404, detail="emissor de demonstração desligado")
     if not auth.demo_can_issue(body.level, body.password):
         observability.metrics.bump("auth_demo_refused", 1)
+        # Atraso fixo em toda falha: força bruta na senha fica lenta (roda no threadpool, não trava o resto).
+        time.sleep(DEMO_FAIL_DELAY_S)
         detail = ("perfil restrito exige a senha de demonstração" if auth.DEMO_PASSWORD
                   else "perfil restrito desligado: defina RAG_DEMO_PASSWORD no servidor")
         raise HTTPException(status_code=401, detail=detail)
@@ -678,14 +683,19 @@ async def api_upload_document(
     """
     # Read at most limit+1 bytes: an oversized upload is rejected without loading it whole
     # into memory (the Content-Length guard in the middleware stops most of them earlier).
-    if nivel_acesso not in _levels_for(_granted_level(authorization)):
+    granted = _granted_level(authorization)
+    if nivel_acesso not in _levels_for(granted):
         # Gravar conteúdo restrito exige o mesmo perfil que lê-lo.
         raise HTTPException(status_code=403, detail="enviar documento restrito exige perfil restrito")
     content = await file.read(documents.MAX_UPLOAD_BYTES + 1)
     try:
         job = documents.start_ingestion(
-            file.filename or "", content, nivel_acesso=nivel_acesso, reset=reset
+            file.filename or "", content, nivel_acesso=nivel_acesso, reset=reset,
+            granted_level=granted,
         )
+    except documents.SourceNotAccessibleError as e:
+        # Mesmo 404 com ou sem reset: não sobrescreve nem confirma o documento de outro nível.
+        raise HTTPException(status_code=404, detail=str(e))
     except documents.UploadError as e:
         raise HTTPException(status_code=422, detail=str(e))
     observability.metrics.bump("documents_uploaded", 1)

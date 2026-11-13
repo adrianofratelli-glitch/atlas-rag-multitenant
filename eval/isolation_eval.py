@@ -283,8 +283,11 @@ def run(base: str, with_llm: int) -> dict:
     session_refused = 0
     session_probes = [{"level": "restrito"}, {"level": "restrito", "password": "errada"}]
     for body in session_probes:
+        t0 = time.monotonic()
         r = client.post(f"{base}/api/session", json=body)
-        session_refused += r.status_code == 401 and "token" not in r.text
+        # 401 sem token e com o atraso anti força bruta (RAG_DEMO_FAIL_DELAY_S, padrão 1 s)
+        session_refused += (r.status_code == 401 and "token" not in r.text
+                            and time.monotonic() - t0 >= 0.9)
     session_refused_ok = f"{session_refused}/{len(session_probes)}"
 
     # Remoção: sem perfil, documento restrito responde igual a inexistente (404) e nada é apagado.
@@ -294,6 +297,17 @@ def run(base: str, with_llm: int) -> dict:
     r_none = client.delete(f"{base}/api/documents/nao_existe_xyz")
     delete_ok = (r_res.status_code == r_none.status_code == 404 and r_res.json() == r_none.json()
                  and db.documents.count_documents({"metadata.source": "upload_reservado"}) == before_n)
+
+    # Upload sem token com o nome de um upload restrito: com e sem reset, 404 igual e nada gravado.
+    def _snap():
+        return sorted((d["metadata"]["nivel_acesso"], d["text"]) for d in
+                      db.documents.find({"metadata.source": "upload_reservado"}, {"text": 1, "metadata": 1}))
+    snap = _snap()
+    over = [client.post(f"{base}/api/documents", files={"file": ("upload_reservado.md", b"# publico por cima")},
+                        data={"nivel_acesso": "publico", "reset": reset}) for reset in ("true", "false")]
+    time.sleep(3)  # se tivesse virado job, a ingestão já teria apagado/gravado algo
+    overwrite_ok = (all(r.status_code == 404 for r in over) and over[0].json() == over[1].json()
+                    and "chunks" not in over[1].text and _snap() == snap)
 
     # Jobs: upload restrito feito com token restrito não aparece (nem por id) para o público.
     jobs_ok = None
@@ -352,6 +366,7 @@ def run(base: str, with_llm: int) -> dict:
         "forged_shared_secret": shared_secret,
         "demo_session_restricted_refused": session_refused_ok,
         "delete_hidden_ok": delete_ok,
+        "public_overwrite_blocked_ok": overwrite_ok,
         "jobs_hidden_ok": jobs_ok,
         "restricted_recall": f"{restricted_hits}/{restricted_probes}",
         "injection_chunks_dropped": injection_dropped,
@@ -386,6 +401,7 @@ def main(argv=None) -> int:
     ok_probes, planned = map(int, report["probes"].split("/"))
     sr, sp = report["demo_session_restricted_refused"].split("/")
     failed = (ok_probes != planned or not report["history_acl_ok"] or sr != sp or not report["delete_hidden_ok"]
+              or not report["public_overwrite_blocked_ok"]
               or report["jobs_hidden_ok"] is False or report["tenant_leaks"] or report["acl_leaks"] or report["documents_listing_leaks"] or llm_leaks
               or report["forged_rejected"].split("/")[0] != report["forged_rejected"].split("/")[1]
               or report["restricted_recall"].split("/")[0] in ("0",))

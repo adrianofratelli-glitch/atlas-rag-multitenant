@@ -146,6 +146,7 @@ class UploadAdversarial(unittest.TestCase):
     def test_upload_named_like_base_corpus_is_refused_before_any_write(self):
         """P1: upload com o nome do corpus base + reindexar apagava o corpus (delete_many por source)."""
         with mock.patch.object(documents, "is_protected", return_value=True), \
+             mock.patch.object(documents, "source_levels", return_value=["publico"]), \
              mock.patch.object(documents, "_executor") as ex, \
              mock.patch.object(Path, "write_bytes") as wb:
             with self.assertRaises(documents.UploadError):

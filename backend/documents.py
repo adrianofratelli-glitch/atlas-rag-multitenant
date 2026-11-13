@@ -406,13 +406,29 @@ def _prune_locked() -> None:
         _jobs.pop(jid, None)
 
 
+class SourceNotAccessibleError(UploadError):
+    """O nome já pertence a um documento que o chamador não lê: responde como inexistente."""
+
+
 def start_ingestion(
-    filename: str, content: bytes, nivel_acesso: str = "publico", reset: bool = False
+    filename: str, content: bytes, nivel_acesso: str = "publico", reset: bool = False,
+    granted_level: str = "publico",
 ) -> dict:
-    """Persist the upload and queue it for ingestion. Returns the initial job."""
+    """Persist the upload and queue it for ingestion. Returns the initial job.
+
+    `granted_level` é o nível do token do chamador. Um nome que já existe com trecho acima
+    desse nível é recusado ANTES de qualquer escrita: sem isso, `reset=true` de um chamador
+    sem token apagava os trechos restritos e gravava conteúdo público no lugar, e sem reset o
+    erro do job confirmava nome e contagem do documento restrito.
+    """
+    from backend import auth
+
     validate_extension(filename)
     validate_size(len(content))
     source = safe_source_name(filename)
+    existing_levels = source_levels(source)
+    if existing_levels and not auth.can_read(granted_level, auth.max_level(existing_levels)):
+        raise SourceNotAccessibleError("nome de documento indisponível; renomeie o arquivo")
     # An upload named like a reference-corpus document (e.g. the same file sent again
     # with "reindex" ticked) would reach ingest(reset=True), whose delete_many by
     # metadata.source wiped the tenant's base corpus. Refuse it before any work.
@@ -494,9 +510,10 @@ def _run_job(job_id: str, path: str, source: str, nivel_acesso: str, reset: bool
             job_id,
             status="error",
             phase="error",
+            # Sem contagem de trechos: a mensagem não confirma nada além do que o perfil já vê.
             error=(
-                f"'{source}' já está indexado ({e.existing} chunks). "
-                "Reenvie marcando a opção de reindexar."
+                f"'{source}' já está indexado. "
+                "Reenvie marcando a opção de reindexar ou renomeie o arquivo."
             ),
             finished_at=time.time(),
         )

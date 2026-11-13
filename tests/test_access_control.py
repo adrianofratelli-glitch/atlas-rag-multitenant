@@ -131,8 +131,20 @@ class ChatAccessTests(unittest.TestCase):
 
 class SessionAndHistoryTests(unittest.TestCase):
     def _session(self, body, password_env):
-        with mock.patch.object(auth, "DEMO_PASSWORD", password_env):
+        with mock.patch.object(auth, "DEMO_PASSWORD", password_env), \
+             mock.patch.object(api, "DEMO_FAIL_DELAY_S", 0.0):
             return TestClient(api.app).post("/api/session", json=body)
+
+    def test_failed_session_is_delayed_and_success_is_not(self):
+        with mock.patch.object(auth, "DEMO_PASSWORD", "s3nha"), \
+             mock.patch.object(api.time, "sleep") as sleep:
+            client = TestClient(api.app)
+            self.assertEqual(client.post("/api/session", json={"level": "restrito", "password": "x"}).status_code, 401)
+            sleep.assert_called_once_with(api.DEMO_FAIL_DELAY_S)
+            sleep.reset_mock()
+            self.assertEqual(client.post("/api/session", json={"level": "restrito", "password": "s3nha"}).status_code, 200)
+            sleep.assert_not_called()
+        self.assertGreaterEqual(api.DEMO_FAIL_DELAY_S, 1.0)
 
     def test_public_session_needs_no_password(self):
         resp = self._session({"level": "publico"}, "")
@@ -243,6 +255,51 @@ class SessionAndHistoryTests(unittest.TestCase):
         with mock.patch.object(documents, "get_client", return_value={documents.DB_NAME: {"documents": col}}):
             self.assertEqual(documents.source_levels("x"), ["publico", "restrito"])
 
+    def _upload(self, levels, reset, headers=None, name="segredo.md"):
+        with mock.patch.object(documents, "source_levels", return_value=levels), \
+             mock.patch.object(documents, "is_protected", return_value=False), \
+             mock.patch.object(documents, "_executor") as ex, \
+             mock.patch.object(Path, "write_bytes") as wb:
+            resp = TestClient(api.app).post(
+                "/api/documents", files={"file": (name, b"# conteudo publico")},
+                data={"nivel_acesso": "publico", "reset": str(reset).lower()}, headers=headers or {})
+        return resp, ex, wb
+
+    def test_public_upload_cannot_overwrite_or_probe_restricted_name(self):
+        """Achado da revisão 2: reset=true sem token apagava o upload restrito; sem reset, o erro
+        do job confirmava nome e contagem."""
+        details = set()
+        for levels in (["restrito"], ["publico", "restrito"]):
+            for reset in (True, False):
+                with self.subTest(levels=levels, reset=reset):
+                    resp, ex, wb = self._upload(levels, reset)
+                    self.assertEqual(resp.status_code, 404)
+                    ex.submit.assert_not_called()
+                    wb.assert_not_called()
+                    details.add(resp.json()["detail"])
+        self.assertEqual(len(details), 1)  # mesma resposta com e sem reset
+
+    def test_upload_over_readable_name_still_works(self):
+        resp, ex, _ = self._upload(["publico"], True)
+        self.assertEqual(resp.status_code, 200)
+        ex.submit.assert_called_once()
+        tok = auth.issue_token(TENANT, "restrito")
+        resp, ex, _ = self._upload(["restrito"], True, {"Authorization": f"Bearer {tok}"})
+        self.assertEqual(resp.status_code, 200)
+        resp, ex, _ = self._upload([], False)  # nome novo
+        self.assertEqual(resp.status_code, 200)
+
+    def test_already_indexed_error_has_no_chunk_count(self):
+        from backend.ingest import AlreadyIndexedError
+
+        documents._jobs["jx"] = {"job_id": "jx", "status": "queued"}
+        with mock.patch.object(documents, "ingest", side_effect=AlreadyIndexedError("doc", 7)):
+            documents._run_job("jx", "/tmp/x.md", "doc", "publico", False)
+        err = documents.get_job("jx")["error"]
+        documents._jobs.pop("jx", None)
+        self.assertIn("já está indexado", err)
+        self.assertNotIn("7", err)
+
     def test_restricted_upload_requires_restricted_token(self):
         with mock.patch.object(documents, "start_ingestion") as start:
             resp = TestClient(api.app).post("/api/documents", files={"file": ("x.md", b"# x")},
@@ -307,7 +364,7 @@ class GraphAclTests(unittest.TestCase):
         self.assertIn('"$nin": ["R"]', json.dumps(executed))
         # O pipeline exibido na UI não revela o nome do documento negado.
         self.assertNotIn('"R"', json.dumps(pipeline))
-        self.assertIn("1 documento(s) fora do perfil", json.dumps(pipeline))
+        self.assertIn("<documentos fora do perfil>", json.dumps(pipeline))
         self.assertTrue(parsed["pipeline_redacted"])
 
     def test_pipeline_not_flagged_when_nothing_denied(self):
